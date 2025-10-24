@@ -28,6 +28,9 @@ class Config:
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
+    # Google Sheets設定
+    SPREADSHEET_ID: Optional[str] = os.getenv("SPREADSHEET_ID")
+
     # ジョブ管理
     MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "3"))
 
