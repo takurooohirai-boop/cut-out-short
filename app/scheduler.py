@@ -124,8 +124,8 @@ async def main():
                                 "title": f"{file_name.replace('.mp4', '')} - Part {idx+1}",
                                 "youtube_url": youtube_url,
                                 "duration": output.duration_sec,
-                                "segment_start": output.segment.start if output.segment else 0,
-                                "segment_end": output.segment.end if output.segment else 0,
+                                "segment_start": output.segment.get("start", 0) if output.segment else 0,
+                                "segment_end": output.segment.get("end", 0) if output.segment else 0,
                                 "method": output.method,
                                 "status": "scheduled"
                             }
