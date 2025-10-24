@@ -26,7 +26,7 @@ class Config:
 
     # LLM設定（任意）
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
 
     # Google Sheets設定
     SPREADSHEET_ID: Optional[str] = os.getenv("SPREADSHEET_ID")

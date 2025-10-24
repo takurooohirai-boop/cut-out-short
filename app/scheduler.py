@@ -18,29 +18,33 @@ async def main():
     log_info("=== Auto Shorts Scheduler Started ===")
 
     try:
-        # 1. Google Driveの入力フォルダをチェック
+        # 1. Google Driveの入力フォルダ（フォルダ構造）をチェック
         log_info(f"Checking Drive folder: {config.DRIVE_INPUT_FOLDER_ID}")
-        files = list_files_in_folder(config.DRIVE_INPUT_FOLDER_ID)
+        from app.drive_io import get_video_folders_from_input
+        video_folders = get_video_folders_from_input()
 
-        if not files:
-            log_info("No files found in input folder. Exiting.")
+        if not video_folders:
+            log_info("No video folders found in input folder. Exiting.")
             return
 
-        log_info(f"Found {len(files)} file(s) to process")
+        log_info(f"Found {len(video_folders)} video folder(s) to process")
 
-        # 処理するファイルの情報を収集
-        for file_info in files:
+        # 処理するフォルダごとの情報を収集
+        for folder_info in video_folders:
             try:
-                file_id = file_info['id']
-                file_name = file_info['name']
+                folder_id = folder_info['folder_id']
+                folder_name = folder_info['folder_name']
+                video_file_id = folder_info['video_file_id']
+                video_file_name = folder_info['video_file_name']
+                source_url = folder_info.get('source_url')
 
-                log_info(f"Processing file: {file_name} (ID: {file_id})")
+                log_info(f"Processing folder: {folder_name} | Video: {video_file_name} | Source: {source_url or 'None'}")
 
                 # 2. ジョブリクエストを作成
                 job_request = CreateJobRequest(
                     source_type="drive",
-                    drive_file_id=file_id,
-                    title_hint=file_name,
+                    drive_file_id=video_file_id,
+                    title_hint=folder_name,
                     options=JobOptions(
                         target_count=5,  # 5本生成
                         min_sec=30,
@@ -106,11 +110,37 @@ async def main():
                     log_info(f"Scheduling upload {idx+1}/{len(result.outputs)}: {video_path} at {upload_date}")
 
                     try:
+                        # AI生成タイトルと説明文を作成
+                        from app.content_generator import generate_title_and_description
+
+                        # セグメントの文字起こしテキストを取得
+                        segment_start = output.segment.get("start", 0) if output.segment else 0
+                        segment_end = output.segment.get("end", 0) if output.segment else 0
+
+                        # SRTファイルから該当セグメントのテキストを抽出
+                        segment_text = _extract_segment_transcript(
+                            result.artifacts.srt_path,
+                            segment_start,
+                            segment_end
+                        )
+
+                        # AI生成
+                        content = generate_title_and_description(
+                            transcript_text=segment_text,
+                            source_url=source_url,
+                            fallback_title=f"{folder_name} - Part {idx+1}"
+                        )
+
+                        title = content["title"]
+                        description = content["description"]
+
+                        log_info(f"Generated title: {title}")
+
                         # YouTube予約投稿
                         youtube_url = upload_to_youtube_scheduled(
                             video_path=video_path,
-                            title=f"{file_name.replace('.mp4', '')} - Part {idx+1}",
-                            description="自動生成されたショート動画\n\n#Shorts",
+                            title=title,
+                            description=description,
                             scheduled_time=upload_date,
                             privacy_status="private"
                         )
@@ -121,11 +151,11 @@ async def main():
                         record_to_sheet(
                             data={
                                 "date": upload_date.strftime("%Y-%m-%d %H:%M"),
-                                "title": f"{file_name.replace('.mp4', '')} - Part {idx+1}",
+                                "title": title,
                                 "youtube_url": youtube_url,
                                 "duration": output.duration_sec,
-                                "segment_start": output.segment.get("start", 0) if output.segment else 0,
-                                "segment_end": output.segment.get("end", 0) if output.segment else 0,
+                                "segment_start": segment_start,
+                                "segment_end": segment_end,
                                 "method": output.method,
                                 "status": "scheduled"
                             }
@@ -137,15 +167,15 @@ async def main():
                         log_error(f"Failed to upload/record clip {idx+1}: {e}", exc_info=True)
                         continue
 
-                # 6. 処理済みファイルを別フォルダに移動
+                # 6. 処理済みフォルダを別フォルダに移動
                 if config.DRIVE_READY_FOLDER_ID:
-                    log_info(f"Moving {file_name} to processed folder")
-                    move_file_to_folder(file_id, config.DRIVE_READY_FOLDER_ID)
+                    log_info(f"Moving folder {folder_name} to processed folder")
+                    move_file_to_folder(folder_id, config.DRIVE_READY_FOLDER_ID)
 
-                log_info(f"Successfully processed: {file_name}")
+                log_info(f"Successfully processed: {folder_name}")
 
             except Exception as e:
-                log_error(f"Failed to process {file_info.get('name', 'unknown')}: {e}", exc_info=True)
+                log_error(f"Failed to process folder {folder_info.get('folder_name', 'unknown')}: {e}", exc_info=True)
                 continue
 
         log_info("=== Auto Shorts Scheduler Completed ===")
@@ -175,6 +205,56 @@ def generate_upload_schedule(start_date: datetime, count: int) -> list[datetime]
         schedule.append(upload_time)
 
     return schedule
+
+
+def _extract_segment_transcript(srt_path: str, start_sec: float, end_sec: float) -> str:
+    """
+    SRTファイルから指定時間範囲のテキストを抽出
+
+    Args:
+        srt_path: SRTファイルパス
+        start_sec: 開始時刻（秒）
+        end_sec: 終了時刻（秒）
+
+    Returns:
+        該当範囲のテキスト
+    """
+    try:
+        import re
+        from pathlib import Path
+
+        if not Path(srt_path).exists():
+            log_warning(f"SRT file not found: {srt_path}")
+            return ""
+
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # SRT形式のパース
+        pattern = r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.*?)(?=\n\n|\Z)'
+        matches = re.findall(pattern, content, re.DOTALL)
+
+        def srt_time_to_seconds(time_str: str) -> float:
+            """SRT時刻を秒に変換"""
+            h, m, s = time_str.split(':')
+            s, ms = s.split(',')
+            return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+
+        # 該当範囲のテキストを収集
+        texts = []
+        for _, start_time, end_time, text in matches:
+            start = srt_time_to_seconds(start_time)
+            end = srt_time_to_seconds(end_time)
+
+            # 範囲内のテキストのみ追加
+            if start >= start_sec and end <= end_sec:
+                texts.append(text.strip())
+
+        return ' '.join(texts)
+
+    except Exception as e:
+        log_error(f"Failed to extract segment transcript: {e}", exc_info=True)
+        return ""
 
 
 if __name__ == "__main__":
