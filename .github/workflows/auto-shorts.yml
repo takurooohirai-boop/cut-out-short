@@ -53,15 +53,14 @@ jobs:
 
       - name: Create .env file
         env:
-          MAKE_SHARED_SECRET: ${{ secrets.MAKE_SHARED_SECRET }}
           DRIVE_INPUT_FOLDER_ID: ${{ secrets.DRIVE_INPUT_FOLDER_ID }}
           DRIVE_READY_FOLDER_ID: ${{ secrets.DRIVE_READY_FOLDER_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
           cat > .env << EOF
-          # API認証
-          MAKE_SHARED_SECRET=${MAKE_SHARED_SECRET}
+          # API認証（GitHub Actionsでは不要）
+          MAKE_SHARED_SECRET=not_used_in_actions
 
           # Google Drive設定
           GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
