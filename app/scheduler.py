@@ -93,9 +93,15 @@ async def main():
                         log_warning(f"No file_name in output {idx+1}, skipping")
                         continue
 
-                    # フルパスを取得（file_nameは相対パスまたは絶対パスの可能性あり）
+                    # フルパスを取得（file_nameがファイル名のみの場合はTMP_DIRと結合）
                     from pathlib import Path
-                    video_path = str(Path(video_file).resolve()) if Path(video_file).exists() else video_file
+                    video_path_obj = Path(video_file)
+
+                    # 絶対パスでない場合はTMP_DIRからの相対パスとして扱う
+                    if not video_path_obj.is_absolute():
+                        video_path_obj = Path(config.TMP_DIR) / video_file
+
+                    video_path = str(video_path_obj.resolve())
 
                     log_info(f"Scheduling upload {idx+1}/{len(result.outputs)}: {video_path} at {upload_date}")
 
