@@ -1,0 +1,433 @@
+"""切り出しセグメント抽出機能（LLM + 規則ベース）"""
+import json
+import subprocess
+from typing import Optional
+import google.generativeai as genai
+
+from app.config import config
+from app.logging_utils import log_info, log_error, log_warning
+from app.models import TranscriptSegment, SegmentInfo
+
+
+class CutFinderError(Exception):
+    """切り出し抽出例外"""
+    pass
+
+
+def pick_segments(
+    transcript_json: list[TranscriptSegment],
+    video_path: str,
+    target_num: int = 5,
+    min_sec: int = 25,
+    max_sec: int = 45,
+    title_hint: Optional[str] = None,
+    force_rule_based: bool = False,
+    job_id: Optional[str] = None
+) -> list[SegmentInfo]:
+    """
+    文字起こしから切り出しセグメントを抽出
+
+    Args:
+        transcript_json: 文字起こしセグメントリスト
+        video_path: 動画ファイルパス（無音検出用）
+        target_num: 目標本数（3〜8）
+        min_sec: 最小秒数
+        max_sec: 最大秒数
+        title_hint: タイトルヒント
+        force_rule_based: LLMをスキップして規則ベースのみ使用
+        job_id: ジョブID（ログ用）
+
+    Returns:
+        選定されたセグメントリスト
+
+    Raises:
+        CutFinderError: 抽出失敗時
+    """
+    log_info(
+        f"Starting segment extraction (target: {target_num}, {min_sec}-{max_sec}s)",
+        job_id=job_id,
+        stage="cut_selecting"
+    )
+
+    try:
+        # LLMベースの抽出を試行（force_rule_basedでない場合）
+        if not force_rule_based and config.GEMINI_API_KEY:
+            try:
+                segments = _pick_segments_llm(
+                    transcript_json,
+                    target_num=target_num,
+                    min_sec=min_sec,
+                    max_sec=max_sec,
+                    title_hint=title_hint,
+                    job_id=job_id
+                )
+
+                if segments and len(segments) >= 3:
+                    log_info(f"LLM extraction succeeded: {len(segments)} segments", job_id=job_id)
+                    return segments
+                else:
+                    log_warning("LLM extraction returned insufficient segments, falling back to rule-based", job_id=job_id)
+
+            except Exception as e:
+                log_warning(f"LLM extraction failed: {e}, falling back to rule-based", job_id=job_id)
+
+        # 規則ベースのフォールバック
+        segments = _pick_segments_rule_based(
+            transcript_json,
+            video_path,
+            target_num=target_num,
+            min_sec=min_sec,
+            max_sec=max_sec,
+            job_id=job_id
+        )
+
+        log_info(f"Rule-based extraction completed: {len(segments)} segments", job_id=job_id)
+        return segments
+
+    except Exception as e:
+        log_error(f"Segment extraction failed: {e}", job_id=job_id, exc_info=True)
+        raise CutFinderError(f"Segment extraction error: {e}") from e
+
+
+def _pick_segments_llm(
+    transcript_json: list[TranscriptSegment],
+    target_num: int,
+    min_sec: int,
+    max_sec: int,
+    title_hint: Optional[str],
+    job_id: Optional[str]
+) -> list[SegmentInfo]:
+    """
+    LLMを使用してセグメントを抽出
+
+    Returns:
+        選定されたセグメントリスト
+    """
+    log_info("Using LLM for segment extraction", job_id=job_id)
+
+    # トランスクリプトをテキストに変換
+    transcript_text = "\n".join([
+        f"[{seg.start:.1f}s - {seg.end:.1f}s] {seg.text}"
+        for seg in transcript_json
+    ])
+
+    # プロンプトを構築
+    prompt = f"""あなたはYouTubeショート動画のエディターです。
+以下の動画の文字起こしから、視聴維持率が高い{min_sec}〜{max_sec}秒の区間を{target_num}個選んでください。
+
+【選定条件】
+1. 結論、驚き、HowToの要点を含む区間を優先
+2. 冒頭3秒にフック（引きのある発言）を置ける
+3. 文章が途中で切れない（話の区切りが良い）
+4. 視聴者が「続きが気になる」または「納得できる」内容
+
+【動画タイトル】
+{title_hint or "不明"}
+
+【文字起こし】
+{transcript_text[:4000]}  # トークン制限のため最初の4000文字
+
+【出力形式】
+以下のJSON配列のみを返してください（説明文は不要）：
+[
+  {{
+    "start": 開始秒数（float）,
+    "end": 終了秒数（float）,
+    "reason": "選定理由（30文字以内）",
+    "score": スコア（0.0〜1.0）
+  }}
+]
+
+※ start/endは文字起こしのタイムスタンプから選択してください
+※ {min_sec}秒以上{max_sec}秒以内の区間のみ
+※ 区間の重複は避けてください
+"""
+
+    try:
+        # Gemini APIを設定
+        genai.configure(api_key=config.GEMINI_API_KEY)
+        model = genai.GenerativeModel(config.GEMINI_MODEL)
+
+        # プロンプトにシステム指示を含める
+        full_prompt = "あなたはYouTubeショート動画の編集アシスタントです。JSON形式で応答してください。\n\n" + prompt
+
+        response = model.generate_content(
+            full_prompt,
+            generation_config={
+                "temperature": 0.7,
+                "max_output_tokens": 1500,
+            }
+        )
+
+        content = response.text
+        log_info(f"LLM response received ({len(content)} chars)", job_id=job_id)
+
+        # JSONをパース
+        # マークダウンのコードブロックを除去
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        candidates = json.loads(content)
+
+        # SegmentInfoに変換
+        segments = []
+        for cand in candidates:
+            duration = cand["end"] - cand["start"]
+
+            # 条件チェック
+            if min_sec <= duration <= max_sec:
+                segments.append(SegmentInfo(
+                    start=cand["start"],
+                    end=cand["end"],
+                    score=cand.get("score", 0.7),
+                    method="llm",
+                    reason=cand.get("reason", "")
+                ))
+
+        # 重複除去（重なり>30%）
+        segments = _remove_overlapping_segments(segments, overlap_threshold=0.3)
+
+        # スコア順にソートして上位を返す
+        segments.sort(key=lambda x: x.score, reverse=True)
+        return segments[:target_num]
+
+    except Exception as e:
+        log_error(f"LLM extraction error: {e}", job_id=job_id, exc_info=True)
+        raise
+
+
+def _pick_segments_rule_based(
+    transcript_json: list[TranscriptSegment],
+    video_path: str,
+    target_num: int,
+    min_sec: int,
+    max_sec: int,
+    job_id: Optional[str]
+) -> list[SegmentInfo]:
+    """
+    規則ベースでセグメントを抽出（フォールバック）
+
+    Returns:
+        選定されたセグメントリスト
+    """
+    log_info("Using rule-based segment extraction", job_id=job_id)
+
+    segments = []
+
+    # 無音区間を検出
+    silence_points = _detect_silence(video_path, job_id=job_id)
+
+    # 文字起こしの句読点と無音を境界候補とする
+    boundaries = set()
+
+    # 句読点境界
+    for seg in transcript_json:
+        if seg.text.endswith(("。", "！", "？", ".", "!", "?")):
+            boundaries.add(seg.end)
+
+    # 無音境界
+    boundaries.update(silence_points)
+
+    # ソート
+    boundaries = sorted(boundaries)
+
+    # 目標秒数の中間値
+    target_sec = (min_sec + max_sec) / 2
+
+    # 境界を使って自然な区間を作成
+    current_start = 0.0
+    total_duration = transcript_json[-1].end if transcript_json else 60.0
+
+    # 境界がない場合は固定尺フォールバック
+    if not boundaries:
+        log_warning("No boundaries found, using fixed duration", job_id=job_id)
+        return _create_fixed_segments(total_duration, target_num, min_sec, max_sec)
+
+    boundaries_list = sorted(list(boundaries))
+
+    while current_start < total_duration and len(segments) < target_num:
+        # 目標終了時刻
+        target_end = current_start + target_sec
+
+        # 有効な境界（min_sec以上、max_sec以下の範囲）を探す
+        valid_boundaries = [
+            b for b in boundaries_list
+            if current_start < b <= total_duration
+            and min_sec <= (b - current_start) <= max_sec
+        ]
+
+        if valid_boundaries:
+            # 目標時刻に最も近い境界を選択
+            best_end = min(valid_boundaries, key=lambda b: abs(b - target_end))
+        else:
+            # 有効な境界がない場合、min_sec以上の最小境界を探す
+            possible_boundaries = [
+                b for b in boundaries_list
+                if current_start < b <= total_duration
+                and (b - current_start) >= min_sec
+            ]
+
+            if possible_boundaries:
+                best_end = possible_boundaries[0]  # 最初の有効な境界
+            else:
+                # それでも見つからない場合は強制的に次へ
+                current_start = min(
+                    [b for b in boundaries_list if b > current_start],
+                    default=current_start + target_sec
+                )
+                continue
+
+        # セグメント作成
+        duration = best_end - current_start
+        if min_sec <= duration <= max_sec:
+            segments.append(SegmentInfo(
+                start=current_start,
+                end=best_end,
+                score=0.6,  # 境界ベースなのでスコア少し高め
+                method="rule",
+                reason="句読点・無音境界で分割"
+            ))
+            current_start = best_end
+        else:
+            # 次の境界から再試行
+            current_start = best_end
+
+    # 最低3本を保証
+    if len(segments) < 3:
+        log_warning(f"Insufficient segments ({len(segments)}), creating fixed-duration segments", job_id=job_id)
+        segments = _create_fixed_segments(total_duration, target_num, min_sec, max_sec)
+
+    return segments[:target_num]
+
+
+def _detect_silence(video_path: str, job_id: Optional[str] = None) -> list[float]:
+    """
+    ffmpegのsilencedetectで無音区間を検出
+
+    Returns:
+        無音終了時刻のリスト（秒）
+    """
+    try:
+        cmd = [
+            "ffmpeg",
+            "-i", video_path,
+            "-af", "silencedetect=noise=-30dB:d=0.5",
+            "-f", "null",
+            "-"
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        # stderrから無音終了時刻を抽出
+        silence_points = []
+        for line in result.stderr.split("\n"):
+            if "silence_end:" in line:
+                try:
+                    # 例: [silencedetect @ ...] silence_end: 12.345 | silence_duration: 1.234
+                    end_time = float(line.split("silence_end:")[1].split("|")[0].strip())
+                    silence_points.append(end_time)
+                except (IndexError, ValueError):
+                    continue
+
+        log_info(f"Detected {len(silence_points)} silence points", job_id=job_id)
+        return silence_points
+
+    except Exception as e:
+        log_warning(f"Silence detection failed: {e}, using empty list", job_id=job_id)
+        return []
+
+
+def _create_fixed_segments(
+    total_duration: float,
+    target_num: int,
+    min_sec: int,
+    max_sec: int
+) -> list[SegmentInfo]:
+    """
+    固定尺で均等にセグメントを作成（最終フォールバック）
+
+    Returns:
+        セグメントリスト
+    """
+    segments = []
+    segment_duration = (min_sec + max_sec) / 2
+    current_start = 0.0
+
+    for i in range(target_num):
+        end = min(current_start + segment_duration, total_duration)
+        if end - current_start >= min_sec:
+            segments.append(SegmentInfo(
+                start=current_start,
+                end=end,
+                score=0.5,
+                method="rule",
+                reason="固定尺分割"
+            ))
+        current_start = end
+
+        if current_start >= total_duration:
+            break
+
+    return segments
+
+
+def _remove_overlapping_segments(
+    segments: list[SegmentInfo],
+    overlap_threshold: float = 0.3
+) -> list[SegmentInfo]:
+    """
+    重複セグメントを除去（重なり>30%のものを削除）
+
+    Args:
+        segments: セグメントリスト
+        overlap_threshold: 重複閾値（0.0〜1.0）
+
+    Returns:
+        重複を除去したセグメントリスト
+    """
+    if not segments:
+        return []
+
+    # スコア順にソート
+    sorted_segments = sorted(segments, key=lambda x: x.score, reverse=True)
+
+    result = []
+    for seg in sorted_segments:
+        # 既存のセグメントと重複チェック
+        has_overlap = False
+        for existing in result:
+            overlap = _calculate_overlap(seg, existing)
+            if overlap > overlap_threshold:
+                has_overlap = True
+                break
+
+        if not has_overlap:
+            result.append(seg)
+
+    return result
+
+
+def _calculate_overlap(seg1: SegmentInfo, seg2: SegmentInfo) -> float:
+    """
+    2つのセグメントの重複率を計算
+
+    Returns:
+        重複率（0.0〜1.0）
+    """
+    start = max(seg1.start, seg2.start)
+    end = min(seg1.end, seg2.end)
+
+    if start >= end:
+        return 0.0
+
+    overlap_duration = end - start
+    min_duration = min(seg1.end - seg1.start, seg2.end - seg2.start)
+
+    return overlap_duration / min_duration if min_duration > 0 else 0.0

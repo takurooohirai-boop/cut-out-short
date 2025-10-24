@@ -1,0 +1,452 @@
+
+
+# プログラム仕様書（Make連携・全自前ショート生成API）
+
+## 0. 要約（TL;DR）
+
+* **目的**：Google Driveに置かれた横長動画（or URL.txt）から、**完全自動で9:16（上下黒帯）＋字幕付きショート**を3–8本生成し、Makeから**HTTP**で制御・取得できるAPIを提供する。
+* **構成**：`FastAPI + (faster-)Whisper + ffmpeg + LLM(任意) + Google Drive API` を**Cloud Run**上にデプロイ。
+* **Make側**：Drive監視→`POST /jobs`→`GET /jobs/{id}`ポーリング→完成MP4を受け取り→YouTube投稿→Sheets記録。
+* **デバッグ配慮**：段階ログ、トレースID、Dry-run、リトライ、フォールバック（固定尺分割）を用意。
+
+---
+
+## 1. 非機能要件
+
+* **スループット**：同時3ジョブ（初期値）。キュー待ち許容。
+* **レイテンシ目安**：30〜180秒/本（素材長・モデル・環境依存）。
+* **安定性**：Whisper失敗時や字幕整形失敗時も**最低3本**を固定尺で出す。
+* **可観測性**：JSON構造ログ＋ジョブ状態管理（`queued / downloading / transcribing / cut_selecting / rendering / uploading / done / error`）。
+* **再実行**：`/jobs/{id}/retry`でリトライ可能（冪等キーあり）。
+* **セキュリティ**：Make→APIは**共通鍵（X-API-KEY）**。Cloud Runは**認証必須**。Driveは**サービスアカウントを対象フォルダに招待**。
+
+---
+
+## 2. コンポーネント一覧
+
+* **API層（FastAPI）**：
+
+  * ジョブ受付・進捗照会・健全性・再実行・Dry-run。
+* **Worker層**：
+
+  * 取得（Drive or yt-dlp）→文字起こし（Whisper）→候補抽出（LLM/規則）→レンダリング（ffmpeg）→アップロード（Drive）。
+* **ストレージ**：
+
+  * **入力**：Drive `inbox/`（Make監視）
+  * **出力**：Drive `ready/`（Makeが拾う）
+* **ジョブストア**：
+
+  * 初期は**インメモリ（辞書）**、本番は**Redis/Firestore**を推奨（キー：`job:{id}`）。
+
+---
+
+## 3. エンドポイント仕様
+
+### 3.1 `POST /jobs` — ジョブ作成
+
+* **Header**：`X-API-KEY: <secret>`（必須）
+* **Body(JSON)**：
+
+  ```json
+  {
+    "source_type": "drive",           // "drive" | "youtube_url"
+    "drive_file_id": "xxx",           // source_type=driveの時 必須
+    "youtube_url": null,              // source_type=youtube_urlの時 必須
+    "title_hint": "動画タイトル仮",
+    "options": {
+      "target_count": 5,              // 3〜8、既定5
+      "min_sec": 25,                  // 既定25
+      "max_sec": 45,                  // 既定45
+      "render_preset": "v1",          // ffmpegテンプレ名
+      "subtitle_style": "default",    // SRT→drawtext/ass style
+      "dry_run": false,               // trueでDL/解析まで、書き出し/UL省略
+      "force_rule_based": false       // trueでLLMスキップ（規則抽出のみ）
+    },
+    "idempotency_key": "任意の一意キー" // 同一キーは同一ジョブ扱い
+  }
+  ```
+* **Response(201)**：
+
+  ```json
+  { "job_id": "uuid", "status": "queued" }
+  ```
+
+### 3.2 `GET /jobs/{job_id}` — 状態取得
+
+* **Header**：`X-API-KEY` 必須
+* **Response(200)**：
+
+  ```json
+  {
+    "job_id": "uuid",
+    "status": "rendering",          // 状態
+    "progress": 0.62,               // 0.0〜1.0（推定）
+    "message": "",
+    "outputs": [                    // done時のみ
+      {
+        "file_name": "clip_01.mp4",
+        "drive_link": "https://drive.google.com/...",
+        "duration_sec": 32.1,
+        "segment": { "start": 123.4, "end": 155.6 },
+        "method": "llm"             // "llm" | "rule"
+      }
+    ],
+    "trace_id": "trace-xxxxx"
+  }
+  ```
+
+### 3.3 `POST /jobs/{job_id}/retry`
+
+* **用途**：`error`時の再実行（`force_rule_based`等を上書き可）
+* **Body(JSON)**（任意）：
+
+  ```json
+  { "options": { "force_rule_based": true } }
+  ```
+
+### 3.4 `GET /healthz` / `GET /version`
+
+* **healthz**：200 + `{"ok":true}`
+* **version**：`{"version":"x.y.z","git":"<short-sha>"}`
+
+---
+
+## 4. ジョブ状態モデル（簡易）
+
+```json
+{
+  "job_id": "uuid",
+  "status": "queued|downloading|transcribing|cut_selecting|rendering|uploading|done|error",
+  "progress": 0.0,
+  "message": "",
+  "inputs": {
+    "source_type": "drive|youtube_url",
+    "drive_file_id": "xxx",
+    "youtube_url": null,
+    "title_hint": "…",
+    "options": { … },
+    "idempotency_key": "…"
+  },
+  "artifacts": {
+    "local_in": "/tmp/in.mp4",
+    "srt_path": "/tmp/in.srt",
+    "transcript_json": { … },
+    "segments": [{ "start": 0.0, "end": 32.0, "score": 0.81, "method": "llm|rule" }],
+    "rendered_files": ["/tmp/clip_01.mp4", "..."],
+    "drive_links": ["https://…", "..."]
+  },
+  "outputs": [
+    { "file_name":"clip_01.mp4","drive_link":"…","duration_sec":32.1,"segment":{"start":…,"end":…},"method":"llm" }
+  ],
+  "trace_id": "trace-xxxxx",
+  "created_at": "ISO8601",
+  "updated_at": "ISO8601",
+  "attempt": 1
+}
+```
+
+---
+
+## 5. 処理フロー（詳細）
+
+1. **入力取得**
+
+   * `source_type=drive`：Drive APIで`drive_file_id`の実体を**サービスアカウント**でDL
+   * `source_type=youtube_url`：`yt-dlp`でmp4化（H.264/AAC）
+
+2. **文字起こし（Whisper/faster-whisper）**
+
+   * 出力：
+
+     * `SRT`（字幕用、1–2行／句点区切りで整形）
+     * `transcript.json`（`[{start,end,text}]`）
+
+3. **切り出し候補抽出**
+
+   * **LLM法（既定）**：
+
+     * 入力：要約（全体/各5分窓）、発話リスト
+     * 出力：**25–45秒**のレンジを**score**付きで最大8件
+     * 選定：スコア上位、**重複（重なり>30%）除外**
+     * *プロンプト雛形*（日本語・圧縮要旨 + ルール明記）
+
+       ```
+       目的：会話中心の学び系動画から、視聴維持率が高い25–45秒区間を抽出する。
+       条件：1) 結論/驚き/HowToの要点を含む 2) 冒頭3秒にフック文を置ける 3) 前後文脈が断ち切れない
+       出力JSON: [{start:秒, end:秒, reason:"", score:0-1}]
+       ```
+   * **規則法（フォールバック/force_rule_based=true）**：
+
+     * 句読点と**無音（ffmpeg+silencedetect）**・話者切替（Whisper diarizationが無ければ無視）を境界に**25–45秒**へ**ラウンド**
+     * 同一センテンスの途中切断を避ける（±1.5秒微調整）
+
+4. **レンダリング（ffmpeg）**
+
+   * **キャンバス**：1080×1920 / SAR=1
+   * **レターボックス**（中央Fit＋上下黒帯）：
+
+     ```
+     -vf "scale=iw*min(1080/iw\,1920/ih):ih*min(1080/iw\,1920/ih),
+          pad=1080:1920:(1080-iw*min(1080/iw\,1920/ih))/2:(1920-ih*min(1080/iw\,1920/ih))/2,
+          setsar=1"
+     ```
+   * **字幕**：`subtitles=in.srt:force_style='Fontsize=36,Outline=2,Shadow=0,Alignment=2'`
+
+     * 白＋黒縁、最大2行、**下寄せ**（Alignment=2）
+   * **映像**：H.264 `-crf 18 -pix_fmt yuv420p -r 30`
+   * **音声**：AAC `-b:a 160k -ar 48000`
+   * **音量正規化**（任意）：`loudnorm=I=-16:TP=-1.5:LRA=11`
+
+5. **出力アップロード**
+
+   * Drive `ready/`へ`clip_XX.mp4`をUL→**共有リンク**取得
+   * `outputs[]`に格納
+
+---
+
+## 6. 失敗時フォールバック
+
+* **Whisper失敗**：本編を**連続固定尺**で25–45秒に刻み、先頭から**3本**生成。
+* **字幕生成失敗**：字幕なしで出力（`method:"rule"`扱い、messageに記録）。
+* **Drive/UL失敗**：3回リトライ（指数バックオフ 2s/4s/8s）。
+* **トータル失敗**：`status:error`＋`message`詳細＋`/retry`可能。
+
+---
+
+## 7. ロギング & デバッグ
+
+* **JSONログ**（1行1イベント）：
+
+  ```json
+  {
+    "ts":"2025-10-14T12:34:56.789Z",
+    "level":"INFO",
+    "trace_id":"trace-xxxxx",
+    "job_id":"uuid",
+    "stage":"transcribing",
+    "msg":"whisper start",
+    "meta":{"model":"small","lang":"ja"}
+  }
+  ```
+* **trace_id**：リクエスト→各処理で引継ぎ。
+* **Dry-run**：`options.dry_run=true`でDL/解析のみ。
+* **Feature flags**：`force_rule_based`、`render_preset`、`subtitle_style`。
+
+---
+
+## 8. ディレクトリ構成（提案）
+
+```
+auto-shorts/
+├─ app/
+│  ├─ main.py              # FastAPI endpoints
+│  ├─ worker.py            # run_job, retry
+│  ├─ transcribe.py        # whisper -> srt, transcript.json
+│  ├─ cut_finder.py        # LLM抽出 or 規則抽出
+│  ├─ render.py            # ffmpeg実行
+│  ├─ drive_io.py          # Drive DL/UL（SA）
+│  ├─ yt.py                # yt-dlpラッパ
+│  ├─ logging_utils.py     # JSON logger, trace
+│  ├─ models.py            # Pydantic schemas
+│  └─ config.py            # 環境変数
+├─ tests/
+│  ├─ test_transcribe.py
+│  ├─ test_cut_finder.py
+│  ├─ test_render.py
+│  └─ fixtures/…
+├─ requirements.txt
+├─ Dockerfile
+├─ README.md
+└─ .env.sample
+```
+
+---
+
+## 9. 主要モジュールの責務・関数シグネチャ
+
+### `transcribe.py`
+
+```python
+def transcribe_to_srt(in_mp4: str, set) -> tuple[str, list[dict]]:
+    """
+    return: (srt_path, transcript_json)
+    transcript_json: [{"start": float, "end": float, "text": "…"}]
+    """
+```
+
+### `cut_finder.py`
+
+```python
+def pick_segments(transcript_json: list[dict], target_num=5, min_sec=25, max_sec=45,
+                  title_hint: str | None = None, force_rule_based=False) -> list[dict]:
+    """
+    return: [{"start": float, "end": float, "score": float, "method": "llm|rule"}]
+    """
+```
+
+### `render.py`
+
+```python
+def render_clipset(in_mp4: str, srt_path: str, segments: list[dict], set) -> list[str]:
+    """
+    return: ["/tmp/clip_01.mp4", ...]
+    """
+```
+
+### `drive_io.py`
+
+```python
+def download_from_drive(file_id: str, set) -> str: ...
+def upload_to_drive(local_path: str, set) -> str:  # returns share link
+```
+
+### `worker.py`
+
+```python
+async def run_job(job_id: str, payload: dict, JOBS: dict, set) -> None: ...
+```
+
+---
+
+## 10. 環境変数（.env）
+
+* `MAKE_SHARED_SECRET`：Make→API共有鍵
+* `GOOGLE_APPLICATION_CREDENTIALS`：SA JSONのパス
+* `DRIVE_INPUT_FOLDER_ID` / `DRIVE_READY_FOLDER_ID`
+* `OPENAI_API_KEY`（任意：LLM抽出を使う場合）
+* `WHISPER_MODEL`（`tiny|base|small|medium` 等）
+* `MAX_CONCURRENT_JOBS`（初期3）
+* `TMP_DIR`（`/tmp`固定でも可）
+
+---
+
+## 11. Dockerfile（雛形）
+
+```dockerfile
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+ENV PYTHONUNBUFFERED=1
+CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8080"]
+```
+
+### `requirements.txt`（例）
+
+```
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+pydantic==2.*
+google-api-python-client==2.*
+google-auth==2.*
+google-auth-oauthlib==1.*
+tqdm==4.*
+faster-whisper==1.*
+yt-dlp==2025.*
+python-dotenv==1.*
+```
+
+---
+
+## 12. Cloud Run デプロイ要点
+
+1. GCPプロジェクト作成 → Cloud Run/Secret Manager/Cloud Build有効化
+2. サービスアカウント（例：`auto-shorts@…`）を作り、Drive対象フォルダを**共有**
+3. `gcloud builds submit --tag gcr.io/PROJECT/auto-shorts:v1`
+4. `gcloud run deploy auto-shorts --image gcr.io/PROJECT/auto-shorts:v1 --region asia-northeast1 --allow-unauthenticated=false`
+5. 環境変数とSecretの紐付け（SA JSON）
+6. 発行URLをMakeに設定
+
+---
+
+## 13. Make 連携（最小シナリオ）
+
+1. **Google Drive: Watch files in a folder (`inbox/`)**
+2. **HTTP: POST /jobs**
+
+   * Headers: `X-API-KEY: {{secrets.auto_shorts_key}}`
+   * Body:
+
+     ```json
+     {
+       "source_type": "drive",
+       "drive_file_id": "{{1.id}}",
+       "title_hint": "{{1.name}}",
+       "options": { "target_count": 5, "min_sec": 25, "max_sec": 45 }
+     }
+     ```
+3. **Tools: Sleep 45s**（→必要回数繰返し）
+4. **HTTP: GET /jobs/{{2.body.job_id}}**
+
+   * `status == done`で`outputs[]`を取得
+5. **（任意）承認**：ファイル名末尾「.ok」待ち or Data Storeフラグ
+6. **YouTube: Upload a video**（Shorts）
+7. **Google Sheets: Add a row**（URL/日時/タイトルを記録）
+
+---
+
+## 14. テスト計画（要点）
+
+* **単体**
+
+  * `transcribe_to_srt`：短いmp4 → SRT整合、タイム順序
+  * `pick_segments`：
+
+    * LLM無し（規則）で**25–45秒**に収まるか
+    * 重複除外ロジック
+  * `render_clipset`：映像・音声・字幕の存在、解像度/フレーム/ビットレート
+  * `drive_io`：DL/ULの例外とリトライ
+* **結合**
+
+  * Drive投入→`POST /jobs`→`GET /jobs`で**done**まで到達
+  * Whisper失敗モック→フォールバック3本出力
+* **負荷**
+
+  * 同時3ジョブ、分散された50〜120分素材での連続実行
+* **回帰**
+
+  * `render_preset`・`subtitle_style`変更が他に影響しない
+
+---
+
+## 15. 受け入れ基準（DoD：プログラム版）
+
+* `POST /jobs`→`GET /jobs/{id}`の**API連携**が安定。
+* **Drive in→ready**の一往復で、**9:16/上下黒帯/字幕**のショートが**最低3本**生成。
+* Whisper/LLM失敗時でも**固定尺フォールバック**が作動。
+* JSONログで**trace_id**が一貫して追跡可能。
+* Makeシナリオで**YouTube投稿→Sheets記録**まで実施可能（承認フローの有無は選択）。
+
+---
+
+## 16. 将来拡張（任意）
+
+* **GPU対応**（Cloud Run Jobs+GPU / 自社GPU）で高速化
+* **自動ハイライト**：音量ピーク・笑い声・キーワード強調のスコアリング
+* **ブランドプリセット**：ロゴ透過PNGの合成、余白80pxの安全域テンプレ
+* **マルチ出力**：9:16/1:1/16:9の同時書き出し
+* **SNS拡張**：Instagram/TikTok連携（Makeフロー追加）
+
+---
+
+## 17. サンプル：cURL
+
+```bash
+# 作成
+curl -X POST "$BASE/jobs" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: $KEY" \
+  -d '{
+    "source_type":"drive",
+    "drive_file_id":"1Abc...",
+    "title_hint":"demo.mp4",
+    "options":{"target_count":5,"min_sec":25,"max_sec":45}
+  }'
+
+# 進捗
+curl -H "X-API-KEY: $KEY" "$BASE/jobs/<job_id>"
+```
+
+---

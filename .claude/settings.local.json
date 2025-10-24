@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(tree:*)",
+      "Read(//d/**)",
+      "Bash(pytest:*)",
+      "Bash(dir:*)",
+      "Bash(python -m pip:*)",
+      "Bash(python -m app.main:*)",
+      "Bash(pip install:*)",
+      "Bash(python -c:*)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)",
+      "Read(//c/temp/**)",
+      "Bash(taskkill:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(powershell \"Stop-Process -Id 5672 -Force\")",
+      "Bash(powershell \"Get-Process | Where-Object {$_ProcessName -eq ''python''} | Stop-Process -Force\")",
+      "Bash(powershell \"Stop-Process -Name python -Force\")",
+      "Bash(python -m app.scheduler:*)",
+      "Bash(python test_youtube_auth.py:*)",
+      "Bash(cat:*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
