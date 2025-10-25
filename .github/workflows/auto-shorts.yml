@@ -104,13 +104,15 @@ jobs:
 
       - name: Run scheduler
         run: python -m app.scheduler
-
-      - name: Upload artifacts on failure
-        if: failure()
+      
+      # 追加：生成物を常にアップロード
+      - name: Upload generated shorts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs
+          name: shorts-${{ github.run_id }}
           path: |
-            runout/*.log
-            runout/*.txt
+            runout/*.mp4
+            runout/*.srt
+          if-no-files-found: ignore
           retention-days: 7
