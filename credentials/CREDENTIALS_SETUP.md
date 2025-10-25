@@ -84,6 +84,7 @@ GitHubリポジトリの「Settings」→「Secrets and variables」→「Action
 3. 認証情報ファイルを配置:
    - `service-account.json` （プロジェクトルート）
    - `credentials/youtube-client-secret.json`
+   - 
 4. 初回実行時にYouTubeトークンを生成:
    ```bash
    python -m app.scheduler

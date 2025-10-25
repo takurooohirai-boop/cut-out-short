@@ -40,7 +40,7 @@ def get_sheets_service():
 def record_to_sheet(
     data: Dict[str, Any],
     spreadsheet_id: Optional[str] = None,
-    range_name: str = "CutoutShort!A:H"
+    range_name: str = "CutoutShort!A:L"
 ) -> Dict[str, Any]:
     """
     Googleスプレッドシートに記録を追加
@@ -48,7 +48,7 @@ def record_to_sheet(
     Args:
         data: 記録するデータ（辞書形式）
         spreadsheet_id: スプレッドシートID（未指定の場合は環境変数から取得）
-        range_name: 書き込み先の範囲（デフォルト: Sheet1!A:H）
+        range_name: 書き込み先の範囲（デフォルト: Sheet1!A:L）
 
     Returns:
         APIレスポンス
@@ -80,7 +80,11 @@ def record_to_sheet(
             data.get('segment_start', 0),
             data.get('segment_end', 0),
             data.get('method', ''),
-            data.get('status', 'pending')
+            data.get('status', 'pending'),
+            data.get('input_tokens', 0),
+            data.get('output_tokens', 0),
+            data.get('total_tokens', 0),
+            f"¥{data.get('cost_jpy', 0.0):.4f}"
         ]]
 
         body = {
@@ -111,7 +115,7 @@ def record_to_sheet(
 
 def initialize_sheet_headers(
     spreadsheet_id: Optional[str] = None,
-    range_name: str = "Sheet1!A1:H1"
+    range_name: str = "CutoutShort!A1:L1"
 ) -> Dict[str, Any]:
     """
     スプレッドシートにヘッダー行を作成
@@ -142,7 +146,11 @@ def initialize_sheet_headers(
             '開始位置',
             '終了位置',
             '抽出方法',
-            'ステータス'
+            'ステータス',
+            'Input Tokens',
+            'Output Tokens',
+            'Total Tokens',
+            'コスト (円)'
         ]]
 
         body = {

@@ -157,7 +157,11 @@ async def main():
                                 "segment_start": segment_start,
                                 "segment_end": segment_end,
                                 "method": output.method,
-                                "status": "scheduled"
+                                "status": "scheduled",
+                                "input_tokens": content.get("input_tokens", 0),
+                                "output_tokens": content.get("output_tokens", 0),
+                                "total_tokens": content.get("total_tokens", 0),
+                                "cost_jpy": content.get("cost_jpy", 0.0)
                             }
                         )
 

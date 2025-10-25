@@ -69,6 +69,25 @@ JSON形式のみで回答してください。"""
     content = response.text.strip()
     log_info(f"Gemini response: {content[:100]}...")
 
+    # トークン使用量とコストを計算
+    usage = response.usage_metadata
+    input_tokens = usage.prompt_token_count if usage else 0
+    output_tokens = usage.candidates_token_count if usage else 0
+    total_tokens = input_tokens + output_tokens
+
+    # Gemini 1.5 Flash の料金（2024年10月時点）
+    # Input: $0.075 / 1M tokens, Output: $0.30 / 1M tokens
+    # 1ドル = 150円と仮定
+    INPUT_COST_PER_1M = 0.075 * 150  # 11.25円
+    OUTPUT_COST_PER_1M = 0.30 * 150  # 45円
+
+    input_cost_jpy = (input_tokens / 1_000_000) * INPUT_COST_PER_1M
+    output_cost_jpy = (output_tokens / 1_000_000) * OUTPUT_COST_PER_1M
+    total_cost_jpy = input_cost_jpy + output_cost_jpy
+
+    log_info(f"Token usage: {input_tokens} input + {output_tokens} output = {total_tokens} total")
+    log_info(f"Cost: ¥{total_cost_jpy:.4f} (input: ¥{input_cost_jpy:.4f}, output: ¥{output_cost_jpy:.4f})")
+
     # JSON抽出
     json_match = re.search(r'\{.*\}', content, re.DOTALL)
     if json_match:
@@ -83,7 +102,14 @@ JSON形式のみで回答してください。"""
         description += "\n\n#Shorts"
 
         log_info(f"Generated title: {title}")
-        return {"title": title, "description": description}
+        return {
+            "title": title,
+            "description": description,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "cost_jpy": total_cost_jpy
+        }
 
     raise ValueError("Failed to parse JSON from Gemini response")
 
@@ -116,4 +142,11 @@ def _generate_fallback(
 
     description += "\n\n#Shorts"
 
-    return {"title": title, "description": description}
+    return {
+        "title": title,
+        "description": description,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_jpy": 0.0
+    }

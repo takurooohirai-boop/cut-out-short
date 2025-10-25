@@ -25,7 +25,13 @@
       "Bash(cat:*)",
       "Bash(git init:*)",
       "Bash(git remote add:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python check_drive_folders.py:*)",
+      "Bash(python move_folder_back.py:*)",
+      "Bash(cd:*)"
     ],
     "deny": [],
     "ask": []
