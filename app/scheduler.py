@@ -72,7 +72,7 @@ async def main():
 
                 JOBS[job_id] = job
 
-                log_info(f"Starting job {job_id} for {file_name}")
+                log_info(f"Starting job {job_id} for {folder_name}")
 
                 await run_job(job_id, job_request, JOBS)
 
