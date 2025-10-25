@@ -18,6 +18,15 @@ async def main():
     log_info("=== Auto Shorts Scheduler Started ===")
 
     try:
+        # 0. スプレッドシートのヘッダーを初期化（初回のみ）
+        try:
+            from app.sheets import initialize_sheet_headers
+            log_info("Initializing spreadsheet headers...")
+            initialize_sheet_headers()
+        except Exception as e:
+            # ヘッダーが既に存在する場合などはスキップ
+            log_warning(f"Header initialization skipped or failed: {e}")
+
         # 1. Google Driveの入力フォルダ（フォルダ構造）をチェック
         log_info(f"Checking Drive folder: {config.DRIVE_INPUT_FOLDER_ID}")
         from app.drive_io import get_video_folders_from_input
