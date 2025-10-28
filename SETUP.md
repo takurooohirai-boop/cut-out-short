@@ -203,63 +203,375 @@ GitHubリポジトリの「Settings」→「Secrets and variables」→「Action
 
 ### ステップ8: ローカル環境のセットアップ（YouTube認証用）
 
-#### 8-1. リポジトリをクローン
+> **💡 なぜこのステップが必要？**
+>
+> YouTube認証は「ブラウザを開いてGoogleアカウントでログイン」という対話式の操作が必要です。
+> GitHub Actionsではブラウザが使えないため、**最初の1回だけ**あなたのパソコンで認証を行い、
+> その認証情報（トークン）をGitHubに保存します。
+>
+> **このステップは初回のみ必要です。** 一度設定すれば、あとはGitHub Actionsが自動で動きます。
+
+---
+
+#### 8-1. Pythonがインストールされているか確認
+
+**Windowsの場合：**
+
+1. **「Windows」キーを押して「cmd」と入力**
+2. **コマンドプロンプトを開く**
+3. 以下のコマンドを入力してEnterキーを押す：
+   ```bash
+   python --version
+   ```
+
+**表示される結果：**
+- ✅ `Python 3.11.0` などが表示される → OK！次へ
+- ❌ `'python' は、内部コマンドまたは外部コマンド...` と表示される → Pythonのインストールが必要
+
+**Pythonのインストール（必要な場合）：**
+1. https://www.python.org/downloads/ を開く
+2. 「Download Python 3.11.x」をクリック
+3. ダウンロードしたインストーラーを実行
+4. **重要：「Add Python to PATH」にチェックを入れる**
+5. 「Install Now」をクリック
+6. インストール完了後、コマンドプロンプトを**再起動**して再度 `python --version` で確認
+
+**Mac/Linuxの場合：**
 ```bash
-git clone https://github.com/あなたのユーザー名/CutoutShort.git
-cd CutoutShort
+python3 --version
 ```
+- 3.11以上が表示されればOK
+- 入っていない場合は `brew install python@3.11` (Mac) または公式サイトからインストール
 
-#### 8-2. Python環境のセットアップ
+---
+
+#### 8-2. リポジトリをパソコンにダウンロード（クローン）
+
+**Gitがインストールされているか確認：**
 ```bash
-# Python 3.11以上が必要
-python --version
+git --version
+```
+- ✅ `git version 2.x.x` が表示される → OK！
+- ❌ エラーが出る → Gitのインストールが必要
+  - Windows: https://git-scm.com/download/win からダウンロード
+  - Mac: `brew install git`
 
-# 仮想環境を作成
-python -m venv venv
+**リポジトリをクローン：**
 
-# 仮想環境を有効化
-# Windows:
-venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
+1. **作業したいフォルダに移動**（例：デスクトップ）
+   ```bash
+   # Windowsの例：
+   cd C:\Users\あなたのユーザー名\Desktop
 
-# 依存パッケージをインストール
+   # Macの例：
+   cd ~/Desktop
+   ```
+
+2. **リポジトリをクローン**
+   ```bash
+   git clone https://github.com/あなたのユーザー名/CutoutShort.git
+   ```
+   ※ `あなたのユーザー名` を実際のGitHubユーザー名に変更してください
+
+3. **クローンしたフォルダに移動**
+   ```bash
+   cd CutoutShort
+   ```
+
+4. **現在地を確認**
+   ```bash
+   # Windowsの場合：
+   cd
+
+   # Mac/Linuxの場合：
+   pwd
+   ```
+   → `C:\Users\...\Desktop\CutoutShort` のように表示されればOK
+
+---
+
+#### 8-3. Python仮想環境を作成する
+
+> **💡 仮想環境とは？**
+>
+> このプロジェクト専用のPython環境を作ることで、他のプロジェクトと干渉しないようにします。
+> 「このプロジェクト専用のツール箱」のようなイメージです。
+
+**Windowsの場合：**
+
+1. **仮想環境を作成**
+   ```bash
+   python -m venv venv
+   ```
+   - 実行すると `venv` フォルダが作成されます（10〜30秒かかります）
+   - 何も表示されなくても正常です
+
+2. **仮想環境を有効化**
+   ```bash
+   venv\Scripts\activate
+   ```
+   - 成功すると、プロンプトの先頭に `(venv)` が付きます：
+     ```
+     (venv) C:\Users\...\CutoutShort>
+     ```
+
+**Mac/Linuxの場合：**
+
+1. **仮想環境を作成**
+   ```bash
+   python3 -m venv venv
+   ```
+
+2. **仮想環境を有効化**
+   ```bash
+   source venv/bin/activate
+   ```
+   - 成功すると `(venv)` が付きます
+
+**❌ うまくいかない場合：**
+
+Windowsで「スクリプトの実行がシステムで無効」というエラーが出た場合：
+1. PowerShellを**管理者として実行**
+2. 以下のコマンドを実行：
+   ```powershell
+   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+   ```
+3. `Y` と入力してEnter
+4. 再度 `venv\Scripts\activate` を実行
+
+---
+
+#### 8-4. 必要なパッケージをインストール
+
+**仮想環境が有効な状態で**（`(venv)` が表示されている状態で）以下を実行：
+
+```bash
 pip install -r requirements.txt
 ```
 
-#### 8-3. 認証ファイルを配置
-1. `credentials` フォルダを作成
+**実行すると：**
+- たくさんのパッケージがダウンロード・インストールされます
+- 1〜3分かかります
+- 最後に「Successfully installed...」と表示されればOK
+
+**❌ エラーが出る場合：**
+- `pip install --upgrade pip` を先に実行してからやり直す
+- インターネット接続を確認
+
+---
+
+#### 8-5. 認証ファイルを配置する
+
+> **💡 このステップでは何をする？**
+>
+> 今まで取得した2つのJSONファイルを、プロジェクトの `credentials` フォルダにコピーします。
+
+**1. `credentials` フォルダを作成**
+
 ```bash
 mkdir credentials
 ```
 
-2. ステップ2-2でダウンロードしたJSONファイルを `credentials/service-account.json` として保存
+**2. サービスアカウントのJSONファイルをコピー**
 
-3. ステップ5-2でダウンロードした `youtube-client-secret.json` を `credentials/` フォルダに保存
+- **ステップ2-2** でダウンロードしたJSONファイル（名前は `cutout-short-bot-xxxxx.json` のような形）を探す
+- このファイルを `credentials` フォルダにコピー
+- ファイル名を `service-account.json` に変更
+
+**具体的な手順（Windowsの場合）：**
+1. エクスプローラーでダウンロードフォルダを開く
+2. `cutout-short-bot-xxxxx.json` ファイルを探す
+3. 右クリック→「コピー」
+4. `CutoutShort\credentials` フォルダを開く
+5. 右クリック→「貼り付け」
+6. ファイル名を右クリック→「名前の変更」→ `service-account.json` に変更
+
+**3. YouTubeクライアントシークレットをコピー**
+
+- **ステップ5-2** でダウンロードした `youtube-client-secret.json` ファイルを探す
+- このファイルを `credentials` フォルダにコピー（名前はそのまま）
+
+**最終的なフォルダ構成：**
+```
+CutoutShort/
+  ├── credentials/
+  │   ├── service-account.json          ← 作成済み
+  │   └── youtube-client-secret.json    ← 作成済み
+  ├── app/
+  ├── venv/
+  ├── requirements.txt
+  └── test_youtube_auth.py
+```
+
+**確認方法：**
+```bash
+# Windowsの場合：
+dir credentials
+
+# Mac/Linuxの場合：
+ls credentials
+```
+→ 上記2つのファイルが表示されればOK
 
 ---
 
 ### ステップ9: YouTube認証トークンの取得
 
+> **💡 このステップでは何をする？**
+>
+> `test_youtube_auth.py` というスクリプトを実行すると：
+> 1. ブラウザが自動で開く
+> 2. Googleアカウントでログイン
+> 3. YouTubeへのアクセス許可を与える
+> 4. 認証情報が `credentials/youtube-token.json` として保存される
+>
+> この作業は**最初の1回だけ**必要です。
+
+---
+
 #### 9-1. 認証スクリプトを実行
+
+**仮想環境が有効な状態で**（`(venv)` が表示されている）、以下を実行：
+
 ```bash
 python test_youtube_auth.py
 ```
 
-#### 9-2. ブラウザで認証
-1. ブラウザが自動的に開きます
-2. YouTubeにアップロードしたいGoogleアカウントでログイン
-3. 「このアプリは確認されていません」と表示された場合：
-   - 「詳細」をクリック
-   - 「CutoutShort（安全ではないページ）に移動」をクリック
-4. 「CutoutShortがGoogleアカウントへのアクセスをリクエストしています」
-   - 「許可」をクリック
+**実行すると：**
+```
+Please visit this URL to authorize this application: https://accounts.google.com/o/oauth2/auth?...
+```
+のようなメッセージが表示され、**自動的にブラウザが開きます**。
+
+**❌ ブラウザが開かない場合：**
+- 表示されたURLを手動でコピーしてブラウザに貼り付ける
+
+---
+
+#### 9-2. ブラウザでの認証手順（スクリーンショット付き）
+
+**手順1: Googleアカウントを選択**
+
+ブラウザが開いたら：
+1. **YouTubeにアップロードしたいGoogleアカウント**を選択
+   - 複数アカウントがある場合は注意！
+
+**手順2: 「このアプリは確認されていません」警告が表示される場合**
+
+![警告画面のイメージ]
+```
+┌─────────────────────────────────────┐
+│ このアプリは確認されていません       │
+│                                     │
+│ [詳細] [キャンセル]                 │
+└─────────────────────────────────────┘
+```
+
+1. **「詳細」** をクリック
+2. **「CutoutShort（安全ではないページ）に移動」** をクリック
+   - これは正常です。自分で作成したアプリなので問題ありません
+
+**手順3: アクセス許可を与える**
+
+```
+┌──────────────────────────────────────────┐
+│ CutoutShort が次の許可をリクエストしています │
+│                                          │
+│ ☑ YouTube アカウントの管理               │
+│                                          │
+│ [キャンセル] [許可]                      │
+└──────────────────────────────────────────┘
+```
+
+1. 内容を確認（YouTubeへの動画アップロード権限を求めています）
+2. **「許可」** をクリック
+
+**手順4: 認証完了**
+
+ブラウザに以下のようなメッセージが表示されます：
+```
+The authentication flow has completed. You may close this window.
+```
+
+または
+
+```
+認証フローが完了しました。このウィンドウを閉じてかまいません。
+```
+
+→ ブラウザを閉じてOKです
+
+**コマンドプロンプト/ターミナルに戻ると：**
+```
+Authentication successful!
+Token saved to: credentials/youtube-token.json
+```
+のようなメッセージが表示されればOK！
+
+---
 
 #### 9-3. トークンをGitHub Secretsに追加
-1. `credentials/youtube-token.json` ファイルが作成されます
-2. このファイルの**内容全体**をコピー
-3. GitHubの「Settings」→「Secrets」→「YOUTUBE_TOKEN」を編集
-4. コピーした内容を貼り付けて「Update secret」
+
+**1. `youtube-token.json` ファイルを開く**
+
+**Windowsの場合：**
+1. エクスプローラーで `CutoutShort\credentials\youtube-token.json` を開く
+2. メモ帳で開く（右クリック→「プログラムから開く」→「メモ帳」）
+
+**Mac/Linuxの場合：**
+```bash
+cat credentials/youtube-token.json
+```
+
+**ファイルの中身（例）：**
+```json
+{
+  "token": "ya29.a0AfB_...",
+  "refresh_token": "1//0gP...",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "client_id": "123456789.apps.googleusercontent.com",
+  "client_secret": "GOCSPX-...",
+  "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
+  "expiry": "2024-01-15T12:00:00Z"
+}
+```
+
+**2. ファイルの内容全体をコピー**
+
+- **Ctrl+A**（Mac: Cmd+A）で全選択
+- **Ctrl+C**（Mac: Cmd+C）でコピー
+
+**3. GitHubのSecretsに追加**
+
+1. ブラウザで `https://github.com/あなたのユーザー名/CutoutShort` を開く
+2. **「Settings」** タブをクリック
+3. 左メニューの **「Secrets and variables」** → **「Actions」** をクリック
+4. **「YOUTUBE_TOKEN」** を探してクリック
+   - まだ作成していない場合は「New repository secret」をクリック
+   - Name: `YOUTUBE_TOKEN`
+5. **「Update secret」** または **「Add secret」** の下の大きなテキストボックスに、コピーした内容を貼り付け
+6. **「Update secret」** または **「Add secret」** をクリック
+
+**✅ 成功のサイン：**
+- Secretsのリストに `YOUTUBE_TOKEN` が表示される
+- 値は `***` で隠されている
+
+---
+
+#### 9-4. 動作確認（オプション）
+
+すべて正しく設定されたか確認したい場合：
+
+```bash
+python test_youtube_auth.py
+```
+
+を再度実行すると、今度はブラウザが開かずに：
+```
+Using existing token...
+Authentication successful!
+```
+と表示されればOK！
 
 ---
 
