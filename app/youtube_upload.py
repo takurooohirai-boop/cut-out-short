@@ -107,7 +107,8 @@ def upload_to_youtube_scheduled(
             },
             'status': {
                 'privacyStatus': privacy_status,
-                'publishAt': scheduled_time.isoformat() + 'Z',  # ISO 8601 UTC
+                # TODO: テスト後に予約投稿を有効化する
+                # 'publishAt': scheduled_time.isoformat() + 'Z',  # ISO 8601 UTC
                 'selfDeclaredMadeForKids': False
             }
         }
