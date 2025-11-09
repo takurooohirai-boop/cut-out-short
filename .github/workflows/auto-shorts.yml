@@ -41,10 +41,20 @@ jobs:
             echo "Error: GOOGLE_SERVICE_ACCOUNT_JSON secret is empty or not set"
             exit 1
           fi
+          echo "Secret length: ${#GOOGLE_SERVICE_ACCOUNT_JSON}"
+          echo "First 100 characters: ${GOOGLE_SERVICE_ACCOUNT_JSON:0:100}"
           echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service-account.json
+          echo "File size: $(wc -c < service-account.json) bytes"
+          echo "File content (first 200 chars):"
+          head -c 200 service-account.json
+          echo ""
           # Verify the file was created and is valid JSON
           if ! python -m json.tool service-account.json > /dev/null 2>&1; then
             echo "Error: service-account.json is not valid JSON"
+            echo "Full file content:"
+            cat service-account.json
+            echo "JSON validation error:"
+            python -m json.tool service-account.json 2>&1 || true
             exit 1
           fi
           echo "service-account.json created successfully"
