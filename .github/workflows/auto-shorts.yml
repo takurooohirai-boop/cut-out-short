@@ -1,263 +1,103 @@
-name: Auto Shorts Scheduler
+name: note自動追跡システム
 
 on:
   schedule:
-    # 毎日 12:00 JST (03:00 UTC) に実行
-    - cron: '0 3 * * *'
+    # 毎日 09:00 (JST) に実行
+    # UTC時間で指定（JSTはUTC+9なので、00:00 = 09:00 JST）
+    - cron: '0 0 * * *'
   workflow_dispatch:  # 手動実行も可能
 
 jobs:
-  process-videos:
+  track-note-stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 最大2時間
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: リポジトリをチェックアウト
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+    - name: Pythonをセットアップ
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
-      - name: Install ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+    - name: 依存パッケージをインストール
+      run: |
+        cd tools
+        pip install -r requirements.txt
 
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: 設定ファイルの作成
+      env:
+        NOTE_CONFIG_JSON: ${{ secrets.NOTE_CONFIG_JSON }}
+        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+      run: |
+        cd tools
 
-      - name: Create credentials directory
-        run: mkdir -p credentials
+        # config.jsonの作成
+        if [ -n "$NOTE_CONFIG_JSON" ]; then
+          echo "$NOTE_CONFIG_JSON" > config.json
+          echo "✅ config.jsonを作成しました"
+        else
+          echo "⚠️ Secret 'NOTE_CONFIG_JSON' が設定されていません"
+          # config.jsonがないと動かない場合はここでエラーにする
+          # exit 1
+        fi
 
-      - name: Set up Google Service Account credentials
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: |
-          cat > /tmp/create_service_account.py << 'PYTHON_SCRIPT'
-          import json
-          import os
-          import sys
-          import re
+        # google-credentials.jsonの作成（必要な場合）
+        if [ -n "$GOOGLE_CREDENTIALS_JSON" ]; then
+          echo "$GOOGLE_CREDENTIALS_JSON" > google-credentials.json
+          echo "✅ google-credentials.jsonを作成しました"
+        fi
 
-          json_str = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
-          if not json_str:
-              print('Error: GOOGLE_SERVICE_ACCOUNT_JSON is not set', file=sys.stderr)
-              sys.exit(1)
+        # ファイルの存在確認
+        ls -la config.json || echo "config.json is missing"
 
-          # Remove control characters (JSON doesn't allow most control characters)
-          # Keep only printable characters, newlines, tabs, and carriage returns
-          json_str_cleaned = ''.join(
-              c if (ord(c) >= 32 or c in '\n\t\r') else ' '
-              for c in json_str
-          )
+    - name: note統計情報を取得
+      run: |
+        cd tools
+        python note-auto-tracker.py --once --config config.json
+      continue-on-error: true
 
-          # Try to parse JSON
-          try:
-              json_data = json.loads(json_str_cleaned)
-          except json.JSONDecodeError as parse_error:
-              print(f'Error: Invalid JSON - {parse_error}', file=sys.stderr)
-              print(f'JSON string length: {len(json_str)}', file=sys.stderr)
-              print(f'First 200 chars: {repr(json_str[:200])}', file=sys.stderr)
-              if hasattr(parse_error, "pos") and parse_error.pos:
-                  start = max(0, parse_error.pos - 50)
-                  end = min(len(json_str), parse_error.pos + 50)
-                  print(f'Context around error (char {parse_error.pos}): {repr(json_str[start:end])}', file=sys.stderr)
-              # Try to fix: remove ALL control characters except newlines/tabs/carriage returns
-              json_str_fixed = ''.join(
-                  c if (ord(c) >= 32 or c in '\n\t\r') else ''
-                  for c in json_str
-              )
-              try:
-                  json_data = json.loads(json_str_fixed)
-                  print('Successfully parsed JSON after removing control characters', file=sys.stderr)
-              except Exception as e2:
-                  print(f'Failed to parse even after removing control characters: {e2}', file=sys.stderr)
-                  sys.exit(1)
+    - name: 取得データの確認
+      if: always()
+      run: |
+        echo "=== 取得データの確認 ==="
+        if [ -f "tools/data/sakueduken_stats_"*.json ]; then
+          echo "📄 JSONファイルの内容:"
+          cat tools/data/sakueduken_stats_*.json | head -50
+          echo ""
+          echo "📊 ファイルサイズ:"
+          ls -lh tools/data/sakueduken_stats_*.json
+        else
+          echo "⚠️ JSONファイルが見つかりません"
+        fi
 
-          # Fix private_key: replace escaped newlines with actual newlines
-          if 'private_key' in json_data:
-              private_key = json_data['private_key']
-              # Handle escaped newlines: \\n -> \n, \n -> \n (actual newline)
-              if '\\\\n' in private_key:
-                  private_key = private_key.replace('\\\\n', '\n')
-              elif '\\n' in private_key:
-                  private_key = private_key.replace('\\n', '\n')
-              json_data['private_key'] = private_key
+    - name: データフォルダの確認
+      run: |
+        cd tools
+        ls -la data/ || echo "dataフォルダが存在しません"
+        find data -name "*.json" -type f || echo "JSONファイルが見つかりません"
 
-          # Write JSON file using json.dump()
-          # IMPORTANT: json.dump() will escape newlines as \n, which is correct for JSON
-          # Google auth library will automatically convert \n to actual newlines when reading
-          with open('service-account.json', 'w', encoding='utf-8') as f:
-              json.dump(json_data, f, indent=2, ensure_ascii=False)
+    - name: データをアップロード（Artifacts）
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: note-stats-${{ github.run_number }}
+        path: tools/data/
+        retention-days: 30
+        if-no-files-found: warn
 
-          print('service-account.json created successfully')
+    - name: 実行結果の確認
+      if: always()
+      run: |
+        echo "=== 実行結果の確認 ==="
+        if [ -d "tools/data" ] && [ -n "$(find tools/data -name '*.json' -type f)" ]; then
+          echo "✅ データファイルが正常に作成されました"
+          echo "📊 ファイル一覧:"
+          find tools/data -name "*.json" -type f
+          echo ""
+          echo "💡 データはArtifactsからダウンロードできます"
+          echo "   GitHub Actionsの実行履歴 → Artifacts からダウンロードしてください"
+        else
+          echo "⚠️ データファイルが見つかりません"
+        fi
 
-          # Debug: Check file content
-          with open('service-account.json', 'r', encoding='utf-8') as f:
-              file_content_debug = f.read()
-              print(f'File size: {len(file_content_debug)} bytes')
-              # Check if private_key line exists
-              if '"private_key"' in file_content_debug:
-                  # Extract a portion of private_key line for debugging
-                  pk_line_start = file_content_debug.find('"private_key"')
-                  pk_line_end = min(pk_line_start + 300, len(file_content_debug))
-                  pk_line_preview = file_content_debug[pk_line_start:pk_line_end]
-                  print(f'private_key line preview: {repr(pk_line_preview[:200])}')
-                  # Check for newlines in the file
-                  if '\\n' in pk_line_preview:
-                      print('WARNING: File still contains escaped newlines (\\n)')
-                  if '\n' in pk_line_preview and 'BEGIN' in pk_line_preview:
-                      print('Good: File contains actual newlines in private_key')
-
-          # Verify - skip if there's an error (file may still work for Google auth)
-          try:
-              with open('service-account.json', 'r', encoding='utf-8') as f:
-                  verify_data = json.load(f)
-                  if 'private_key' in verify_data:
-                      pk = verify_data['private_key']
-                      if '\n' in pk and 'BEGIN' in pk and 'END' in pk:
-                          print('private_key verified: contains actual newlines and BEGIN/END markers')
-                      else:
-                          print('WARNING: private_key may not have proper newlines', file=sys.stderr)
-                          has_newline = '\n' in pk
-                          has_begin = 'BEGIN' in pk
-                          print(f'private_key has newline: {has_newline}', file=sys.stderr)
-                          print(f'private_key has BEGIN: {has_begin}', file=sys.stderr)
-          except json.JSONDecodeError as e:
-              # Verification failed, but file might still work
-              print(f'Note: JSON verification failed: {e}', file=sys.stderr)
-              print('But file was created - Google auth library may still be able to read it', file=sys.stderr)
-
-          except Exception as e:
-              print(f'Error: Failed to write service-account.json - {e}', file=sys.stderr)
-              import traceback
-              traceback.print_exc()
-              sys.exit(1)
-          PYTHON_SCRIPT
-          python3 /tmp/create_service_account.py
-          chmod 600 service-account.json
-
-      # YouTube認証の設定（オプション - Secretsが設定されていない場合はスキップ）
-      - name: Set up YouTube client secret
-        env:
-          YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
-        run: |
-          python3 -c "
-          import json
-          import os
-          import sys
-
-          json_str = os.environ.get('YOUTUBE_CLIENT_SECRET_JSON')
-          if not json_str:
-              print('Warning: YOUTUBE_CLIENT_SECRET_JSON secret is not set')
-              print('Creating dummy YouTube credentials (YouTube upload will be skipped)')
-              with open('credentials/youtube-client-secret.json', 'w') as f:
-                  json.dump({'installed': {'client_id': 'dummy'}}, f, indent=2)
-          else:
-              try:
-                  json_data = json.loads(json_str)
-                  with open('credentials/youtube-client-secret.json', 'w') as f:
-                      json.dump(json_data, f, indent=2)
-                  print('youtube-client-secret.json created successfully')
-              except json.JSONDecodeError as e:
-                  print(f'Error: Invalid JSON - {e}', file=sys.stderr)
-                  sys.exit(1)
-          "
-
-      - name: Set up YouTube token
-        env:
-          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
-        run: |
-          python3 -c "
-          import json
-          import os
-          import sys
-
-          json_str = os.environ.get('YOUTUBE_TOKEN_JSON')
-          if not json_str:
-              print('Warning: YOUTUBE_TOKEN_JSON secret is not set')
-              print('Creating dummy YouTube token (YouTube upload will be skipped)')
-              with open('credentials/youtube-token.json', 'w') as f:
-                  json.dump({'token': 'dummy'}, f, indent=2)
-          else:
-              try:
-                  json_data = json.loads(json_str)
-                  with open('credentials/youtube-token.json', 'w') as f:
-                      json.dump(json_data, f, indent=2)
-                  print('youtube-token.json created successfully')
-              except json.JSONDecodeError as e:
-                  print(f'Error: Invalid JSON - {e}', file=sys.stderr)
-                  sys.exit(1)
-          "
-
-      - name: Create .env file
-        env:
-          DRIVE_INPUT_FOLDER_ID: ${{ secrets.DRIVE_INPUT_FOLDER_ID }}
-          DRIVE_READY_FOLDER_ID: ${{ secrets.DRIVE_READY_FOLDER_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-        run: |
-          cat > .env << EOF
-          # API認証（GitHub Actionsでは不要）
-          MAKE_SHARED_SECRET=not_used_in_actions
-
-          # Google Drive設定（環境変数で上書きされる）
-          GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
-          DRIVE_INPUT_FOLDER_ID=${DRIVE_INPUT_FOLDER_ID}
-          DRIVE_READY_FOLDER_ID=${DRIVE_READY_FOLDER_ID}
-
-          # Whisper設定
-          WHISPER_MODEL=small
-          WHISPER_DEVICE=cpu
-          WHISPER_COMPUTE_TYPE=int8
-
-          # Gemini設定
-          GEMINI_API_KEY=${GEMINI_API_KEY}
-          GEMINI_MODEL=gemini-1.5-flash
-
-          # Google Sheets設定
-          SPREADSHEET_ID=${SPREADSHEET_ID}
-
-          # ジョブ管理
-          MAX_CONCURRENT_JOBS=3
-
-          # 一時ファイルディレクトリ
-          TMP_DIR=./runout
-
-          # タイムアウト設定（秒）
-          DOWNLOAD_TIMEOUT=600
-          TRANSCRIBE_TIMEOUT=1800
-          RENDER_TIMEOUT=600
-          UPLOAD_TIMEOUT=600
-
-          # リトライ設定
-          MAX_RETRIES=3
-          RETRY_BACKOFF_BASE=2.0
-
-          # バージョン情報
-          GIT_SHA=${GITHUB_SHA}
-          EOF
-
-      - name: Create output directory
-        run: mkdir -p runout
-
-      - name: Run scheduler
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
-        run: python -m app.scheduler
-
-      # 追加：生成物を常にアップロード
-      - name: Upload generated shorts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shorts-${{ github.run_id }}
-          path: |
-            runout/*.mp4
-            runout/*.srt
-          if-no-files-found: ignore
-          retention-days: 7
