@@ -9,7 +9,7 @@ on:
 jobs:
   run-scheduler:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -71,4 +71,3 @@ jobs:
           rm -f service-account.json
           rm -f credentials/youtube-client-secret.json
           rm -f credentials/youtube-token.json
-
