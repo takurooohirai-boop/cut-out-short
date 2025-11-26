@@ -48,40 +48,61 @@ jobs:
               sys.exit(1)
 
           try:
-              # Parse the JSON
+              # Parse JSON to validate
               json_data = json.loads(json_str)
 
-              # Critical fix: json.dump() will escape newlines in private_key
-              # We need to ensure private_key has actual newlines before writing
+              # Fix private_key: replace escaped newlines with actual newlines
               if 'private_key' in json_data:
                   private_key = json_data['private_key']
-                  # Replace any escaped newlines with actual newlines
-                  if '\\n' in private_key:
-                      # This handles both \\n (double escaped) and \n (single escaped)
+                  # Handle escaped newlines: \\n -> \n, \n -> \n (actual newline)
+                  if '\\\\n' in private_key:
+                      private_key = private_key.replace('\\\\n', '\n')
+                  elif '\\n' in private_key:
                       private_key = private_key.replace('\\n', '\n')
                   json_data['private_key'] = private_key
 
-              # Write JSON file directly as string to preserve newlines
-              # We'll manually construct the JSON to avoid json.dump() escaping issues
+              # Write JSON file
               with open('service-account.json', 'w', encoding='utf-8') as f:
-                  # Use json.dumps with ensure_ascii=False, but we've already fixed newlines
-                  json_str_output = json.dumps(json_data, indent=2, ensure_ascii=False)
-                  f.write(json_str_output)
+                  json.dump(json_data, f, indent=2, ensure_ascii=False)
+
+              # CRITICAL FIX: json.dump() escapes newlines as \n in JSON strings
+              # Google auth library needs actual newlines in the file
+              # Read file and use regex to fix private_key value
+              with open('service-account.json', 'r', encoding='utf-8') as f:
+                  content = f.read()
+
+              # Use regex to find and replace \n with actual newline in private_key value
+              import re
+              # Match "private_key": "value" where value may contain escaped newlines
+              # This regex handles escaped quotes and other escaped characters
+              pattern = r'("private_key"\s*:\s*")((?:[^"\\]|\\.)*)(")'
+
+              def fix_newlines(match):
+                  prefix = match.group(1)
+                  value = match.group(2)
+                  suffix = match.group(3)
+                  # Replace literal \n (backslash + n) with actual newline
+                  fixed_value = value.replace('\\n', '\n')
+                  return prefix + fixed_value + suffix
+
+              fixed_content = re.sub(pattern, fix_newlines, content)
+
+              # Write fixed content
+              with open('service-account.json', 'w', encoding='utf-8') as f:
+                  f.write(fixed_content)
 
               print('service-account.json created successfully')
 
-              # Verify the file can be read and private_key is correct
+              # Verify
               with open('service-account.json', 'r', encoding='utf-8') as f:
-                  file_content = f.read()
-                  verify_data = json.loads(file_content)
+                  verify_data = json.load(f)
                   if 'private_key' in verify_data:
                       pk = verify_data['private_key']
-                      # Check if private_key has actual newlines (not escaped)
                       if '\n' in pk and 'BEGIN' in pk and 'END' in pk:
                           print('private_key verified: contains actual newlines and BEGIN/END markers')
                       else:
-                          print('WARNING: private_key may not have proper newlines', file=sys.stderr)
-                          print(f'private_key preview (first 150 chars): {repr(pk[:150])}', file=sys.stderr)
+                          print('WARNING: private_key verification failed', file=sys.stderr)
+                          print(f'private_key preview: {repr(pk[:200])}', file=sys.stderr)
 
           except json.JSONDecodeError as e:
               print(f'Error: Invalid JSON - {e}', file=sys.stderr)
@@ -158,7 +179,7 @@ jobs:
           # API認証（GitHub Actionsでは不要）
           MAKE_SHARED_SECRET=not_used_in_actions
 
-          # Google Drive設定
+          # Google Drive設定（環境変数で上書きされる）
           GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
           DRIVE_INPUT_FOLDER_ID=${DRIVE_INPUT_FOLDER_ID}
           DRIVE_READY_FOLDER_ID=${DRIVE_READY_FOLDER_ID}
