@@ -48,9 +48,37 @@ jobs:
               print('Error: GOOGLE_SERVICE_ACCOUNT_JSON is not set', file=sys.stderr)
               sys.exit(1)
 
+          # Remove control characters (JSON doesn't allow most control characters)
+          # Keep only printable characters, newlines, tabs, and carriage returns
+          json_str_cleaned = ''.join(
+              c if (ord(c) >= 32 or c in '\n\t\r') else ' '
+              for c in json_str
+          )
+
+          # Try to parse JSON
           try:
-              # Parse JSON to validate
-              json_data = json.loads(json_str)
+              json_data = json.loads(json_str_cleaned)
+          except json.JSONDecodeError as parse_error:
+              print(f'Error: Invalid JSON - {parse_error}', file=sys.stderr)
+              print(f'JSON string length: {len(json_str)}', file=sys.stderr)
+              print(f'First 200 chars: {repr(json_str[:200])}', file=sys.stderr)
+              if hasattr(parse_error, "pos") and parse_error.pos:
+                  start = max(0, parse_error.pos - 50)
+                  end = min(len(json_str), parse_error.pos + 50)
+                  print(f'Context around error (char {parse_error.pos}): {repr(json_str[start:end])}', file=sys.stderr)
+              # Try to fix: remove ALL control characters except newlines/tabs/carriage returns
+              json_str_fixed = ''.join(
+                  c if (ord(c) >= 32 or c in '\n\t\r') else ''
+                  for c in json_str
+              )
+              try:
+                  json_data = json.loads(json_str_fixed)
+                  print('Successfully parsed JSON after removing control characters', file=sys.stderr)
+              except Exception as e2:
+                  print(f'Failed to parse even after removing control characters: {e2}', file=sys.stderr)
+                  sys.exit(1)
+
+          try:
 
               # Fix private_key: replace escaped newlines with actual newlines
               if 'private_key' in json_data:
@@ -103,9 +131,6 @@ jobs:
                           print('WARNING: private_key verification failed', file=sys.stderr)
                           print(f'private_key preview: {repr(pk[:200])}', file=sys.stderr)
 
-          except json.JSONDecodeError as e:
-              print(f'Error: Invalid JSON - {e}', file=sys.stderr)
-              sys.exit(1)
           except Exception as e:
               print(f'Error: Failed to write service-account.json - {e}', file=sys.stderr)
               import traceback
