@@ -48,37 +48,40 @@ jobs:
               sys.exit(1)
 
           try:
+              # Parse the JSON
               json_data = json.loads(json_str)
 
-              # Critical: Ensure private_key has actual newlines, not escaped \\n
-              # When JSON is loaded, \\n becomes \n, but we need to ensure it's a real newline
+              # Critical fix: json.dump() will escape newlines in private_key
+              # We need to ensure private_key has actual newlines before writing
               if 'private_key' in json_data:
                   private_key = json_data['private_key']
-                  # Replace escaped newlines with actual newlines
-                  # This handles both \\n (double escaped) and \n (single escaped)
-                  if '\\\\n' in private_key:
-                      private_key = private_key.replace('\\\\n', '\n')
-                  elif '\\n' in private_key and '\n' not in private_key:
-                      # If we have \n but not actual newlines, convert them
+                  # Replace any escaped newlines with actual newlines
+                  if '\\n' in private_key:
+                      # This handles both \\n (double escaped) and \n (single escaped)
                       private_key = private_key.replace('\\n', '\n')
                   json_data['private_key'] = private_key
 
-              # Write JSON file - use ensure_ascii=False to preserve special characters
+              # Write JSON file directly as string to preserve newlines
+              # We'll manually construct the JSON to avoid json.dump() escaping issues
               with open('service-account.json', 'w', encoding='utf-8') as f:
-                  json.dump(json_data, f, indent=2, ensure_ascii=False)
+                  # Use json.dumps with ensure_ascii=False, but we've already fixed newlines
+                  json_str_output = json.dumps(json_data, indent=2, ensure_ascii=False)
+                  f.write(json_str_output)
 
               print('service-account.json created successfully')
 
-              # Verify private_key has actual newlines
+              # Verify the file can be read and private_key is correct
               with open('service-account.json', 'r', encoding='utf-8') as f:
-                  verify_data = json.load(f)
+                  file_content = f.read()
+                  verify_data = json.loads(file_content)
                   if 'private_key' in verify_data:
                       pk = verify_data['private_key']
+                      # Check if private_key has actual newlines (not escaped)
                       if '\n' in pk and 'BEGIN' in pk and 'END' in pk:
                           print('private_key verified: contains actual newlines and BEGIN/END markers')
                       else:
                           print('WARNING: private_key may not have proper newlines', file=sys.stderr)
-                          print(f'private_key preview: {pk[:100]}...', file=sys.stderr)
+                          print(f'private_key preview (first 150 chars): {repr(pk[:150])}', file=sys.stderr)
 
           except json.JSONDecodeError as e:
               print(f'Error: Invalid JSON - {e}', file=sys.stderr)
