@@ -37,10 +37,11 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
-          python3 -c "
+          cat > /tmp/create_service_account.py << 'PYTHON_SCRIPT'
           import json
           import os
           import sys
+          import re
 
           json_str = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
           if not json_str:
@@ -72,9 +73,7 @@ jobs:
                   content = f.read()
 
               # Use regex to find and replace \n with actual newline in private_key value
-              import re
               # Match "private_key": "value" where value may contain escaped newlines
-              # This regex handles escaped quotes and other escaped characters
               pattern = r'("private_key"\s*:\s*")((?:[^"\\]|\\.)*)(")'
 
               def fix_newlines(match):
@@ -112,7 +111,8 @@ jobs:
               import traceback
               traceback.print_exc()
               sys.exit(1)
-          "
+          PYTHON_SCRIPT
+          python3 /tmp/create_service_account.py
           chmod 600 service-account.json
 
       # YouTube認証の設定（オプション - Secretsが設定されていない場合はスキップ）
