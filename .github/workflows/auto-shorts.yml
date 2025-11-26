@@ -9,7 +9,7 @@ on:
 jobs:
   run-scheduler:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -25,29 +25,103 @@ jobs:
           pip install -r requirements.txt
 
       - name: Create service account file
-        run: |
-          echo "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" > service-account.json
-          chmod 600 service-account.json
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "Error: GOOGLE_SERVICE_ACCOUNT_JSON secret is empty or not set"
+            exit 1
+          fi
+          # Use Python to write JSON to avoid shell escaping issues
+          python3 << 'EOF'
+          import json
+          import os
+          import sys
+          
+          json_str = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+          if not json_str:
+              print("Error: GOOGLE_SERVICE_ACCOUNT_JSON is not set", file=sys.stderr)
+              sys.exit(1)
+          
+          try:
+              # Parse JSON to validate and normalize it
+              json_data = json.loads(json_str)
+              # Write JSON with proper formatting
+              with open('service-account.json', 'w') as f:
+                  json.dump(json_data, f, indent=2)
+              print("service-account.json created successfully")
+          except json.JSONDecodeError as e:
+              print(f"Error: Invalid JSON - {e}", file=sys.stderr)
+              sys.exit(1)
+          except Exception as e:
+              print(f"Error: Failed to write service-account.json - {e}", file=sys.stderr)
+              sys.exit(1)
+          EOF
+          chmod 600 service-account.json
 
       - name: Create YouTube credentials directory
         run: |
           mkdir -p credentials
 
       - name: Create YouTube client secret file
-        run: |
-          echo "${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}" > credentials/youtube-client-secret.json
-          chmod 600 credentials/youtube-client-secret.json
         env:
           YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
+        run: |
+          if [ -z "$YOUTUBE_CLIENT_SECRET_JSON" ]; then
+            echo "Warning: YOUTUBE_CLIENT_SECRET_JSON secret is not set"
+            python3 << 'EOF'
+            import json
+            with open('credentials/youtube-client-secret.json', 'w') as f:
+                json.dump({"installed": {"client_id": "dummy"}}, f, indent=2)
+            EOF
+          else
+            python3 << 'EOF'
+            import json
+            import os
+            import sys
+            
+            json_str = os.environ.get('YOUTUBE_CLIENT_SECRET_JSON')
+            try:
+                json_data = json.loads(json_str)
+                with open('credentials/youtube-client-secret.json', 'w') as f:
+                    json.dump(json_data, f, indent=2)
+                print("youtube-client-secret.json created successfully")
+            except json.JSONDecodeError as e:
+                print(f"Error: Invalid JSON - {e}", file=sys.stderr)
+                sys.exit(1)
+            EOF
+          fi
+          chmod 600 credentials/youtube-client-secret.json
 
       - name: Create YouTube token file
-        run: |
-          echo "${{ secrets.YOUTUBE_TOKEN_JSON }}" > credentials/youtube-token.json
-          chmod 600 credentials/youtube-token.json
         env:
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+        run: |
+          if [ -z "$YOUTUBE_TOKEN_JSON" ]; then
+            echo "Warning: YOUTUBE_TOKEN_JSON secret is not set"
+            python3 << 'EOF'
+            import json
+            with open('credentials/youtube-token.json', 'w') as f:
+                json.dump({"token": "dummy"}, f, indent=2)
+            EOF
+          else
+            python3 << 'EOF'
+            import json
+            import os
+            import sys
+            
+            json_str = os.environ.get('YOUTUBE_TOKEN_JSON')
+            try:
+                json_data = json.loads(json_str)
+                with open('credentials/youtube-token.json', 'w') as f:
+                    json.dump(json_data, f, indent=2)
+                print("youtube-token.json created successfully")
+            except json.JSONDecodeError as e:
+                print(f"Error: Invalid JSON - {e}", file=sys.stderr)
+                sys.exit(1)
+            EOF
+          fi
+          chmod 600 credentials/youtube-token.json
 
       - name: Run scheduler
         run: |
@@ -71,3 +145,4 @@ jobs:
           rm -f service-account.json
           rm -f credentials/youtube-client-secret.json
           rm -f credentials/youtube-token.json
+
