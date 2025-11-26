@@ -88,31 +88,11 @@ jobs:
                   private_key = private_key.replace('\\n', '\n')
               json_data['private_key'] = private_key
 
-          # Write JSON file - we'll use json.dumps() and then manually fix private_key
-          # First, create JSON string
-          json_str_output = json.dumps(json_data, indent=2, ensure_ascii=False)
-
-          # Now fix the private_key value in the JSON string
-          # Find "private_key": "value" and replace \n with actual newline in value
-          # Pattern: "private_key": "value" where value contains \n
-          def replace_private_key_newlines(match):
-              prefix = match.group(1)  # "private_key": "
-              value = match.group(2)    # the value (may contain escaped chars)
-              suffix = match.group(3)    # closing "
-              # In JSON string from json.dumps(), newlines are escaped as \n
-              # We need to replace the literal \n (backslash + n) with actual newline
-              # But be careful: \\n in the string means \n (escaped backslash + n)
-              # So we replace \n (not \\n) with actual newline
-              fixed_value = value.replace('\\n', '\n')
-              return prefix + fixed_value + suffix
-
-          # Match "private_key": "value" - value may contain escaped characters
-          pattern = r'("private_key"\s*:\s*")((?:[^"\\]|\\.)*)(")'
-          json_str_fixed = re.sub(pattern, replace_private_key_newlines, json_str_output)
-
-          # Write the fixed JSON string directly
+          # Write JSON file using json.dump()
+          # IMPORTANT: json.dump() will escape newlines as \n, which is correct for JSON
+          # Google auth library will automatically convert \n to actual newlines when reading
           with open('service-account.json', 'w', encoding='utf-8') as f:
-              f.write(json_str_fixed)
+              json.dump(json_data, f, indent=2, ensure_ascii=False)
 
           print('service-account.json created successfully')
 
