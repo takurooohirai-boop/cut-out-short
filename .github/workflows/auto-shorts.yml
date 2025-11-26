@@ -141,12 +141,12 @@ jobs:
                       pk = verify_data['private_key']
                       if '\n' in pk and 'BEGIN' in pk and 'END' in pk:
                           print('private_key verified: contains actual newlines and BEGIN/END markers')
-              else:
-                  print('WARNING: private_key may not have proper newlines', file=sys.stderr)
-                  has_newline = '\n' in pk
-                  has_begin = 'BEGIN' in pk
-                  print(f'private_key has newline: {has_newline}', file=sys.stderr)
-                  print(f'private_key has BEGIN: {has_begin}', file=sys.stderr)
+                      else:
+                          print('WARNING: private_key may not have proper newlines', file=sys.stderr)
+                          has_newline = '\n' in pk
+                          has_begin = 'BEGIN' in pk
+                          print(f'private_key has newline: {has_newline}', file=sys.stderr)
+                          print(f'private_key has BEGIN: {has_begin}', file=sys.stderr)
           except json.JSONDecodeError as e:
               # Verification failed, but file might still work
               print(f'Note: JSON verification failed: {e}', file=sys.stderr)
