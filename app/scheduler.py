@@ -49,6 +49,35 @@ async def main():
 
                 log_info(f"Processing folder: {folder_name} | Video: {video_file_name} | Source: {source_url or 'None'}")
 
+                from app.transcribe import get_video_duration
+                from pathlib import Path
+                
+                # 一時ダウンロードして長さチェック
+                temp_check_path = config.get_tmp_path(f"check_{video_file_id}.mp4")
+                try:
+                    from app.drive_io import download_from_drive
+                    download_from_drive(video_file_id, temp_check_path, job_id=None)
+                    
+                    video_duration = get_video_duration(temp_check_path)
+                    
+                    # 最小必要秒数（min_sec）より短い場合はスキップ
+                    MIN_REQUIRED_DURATION = 30  # 秒
+                    if video_duration < MIN_REQUIRED_DURATION:
+                        log_warning(f"Video too short ({video_duration:.1f}s < {MIN_REQUIRED_DURATION}s), skipping folder: {folder_name}")
+                        
+                        # フォルダを処理済みに移動
+                        if config.DRIVE_READY_FOLDER_ID:
+                            move_file_to_folder(folder_id, config.DRIVE_READY_FOLDER_ID)
+                            log_info(f"Moved short video folder to processed: {folder_name}")
+                        
+                        Path(temp_check_path).unlink(missing_ok=True)
+                        continue
+                    
+                    Path(temp_check_path).unlink(missing_ok=True)
+                    
+                except Exception as e:
+                    log_warning(f"Failed to check video duration: {e}")
+                    Path(temp_check_path).unlink(missing_ok=True)
                 # 2. ジョブリクエストを作成
                 job_request = CreateJobRequest(
                     source_type="drive",
