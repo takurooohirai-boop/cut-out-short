@@ -180,7 +180,7 @@ jobs:
 
           # Gemini設定
           GEMINI_API_KEY=${GEMINI_API_KEY}
-          GEMINI_MODEL=gemini-1.5-flash-latest
+          GEMINI_MODEL=gemini-2.5-flash
 
           # Google Sheets設定
           SPREADSHEET_ID=${SPREADSHEET_ID}
