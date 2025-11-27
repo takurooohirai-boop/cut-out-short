@@ -48,98 +48,58 @@ jobs:
               print('Error: GOOGLE_SERVICE_ACCOUNT_JSON is not set', file=sys.stderr)
               sys.exit(1)
 
-          # Remove control characters (JSON doesn't allow most control characters)
-          # Keep only printable characters, newlines, tabs, and carriage returns
+          # Remove control characters
           json_str_cleaned = ''.join(
               c if (ord(c) >= 32 or c in '\n\t\r') else ' '
               for c in json_str
           )
 
-          # Try to parse JSON
+          # Parse JSON
           try:
               json_data = json.loads(json_str_cleaned)
           except json.JSONDecodeError as parse_error:
               print(f'Error: Invalid JSON - {parse_error}', file=sys.stderr)
-              print(f'JSON string length: {len(json_str)}', file=sys.stderr)
-              print(f'First 200 chars: {repr(json_str[:200])}', file=sys.stderr)
-              if hasattr(parse_error, "pos") and parse_error.pos:
-                  start = max(0, parse_error.pos - 50)
-                  end = min(len(json_str), parse_error.pos + 50)
-                  print(f'Context around error (char {parse_error.pos}): {repr(json_str[start:end])}', file=sys.stderr)
-              # Try to fix: remove ALL control characters except newlines/tabs/carriage returns
-              json_str_fixed = ''.join(
-                  c if (ord(c) >= 32 or c in '\n\t\r') else ''
-                  for c in json_str
-              )
-              try:
-                  json_data = json.loads(json_str_fixed)
-                  print('Successfully parsed JSON after removing control characters', file=sys.stderr)
-              except Exception as e2:
-                  print(f'Failed to parse even after removing control characters: {e2}', file=sys.stderr)
-                  sys.exit(1)
+              sys.exit(1)
 
-          # Fix private_key: replace escaped newlines with actual newlines BEFORE json.dump()
-          # This ensures json.dump() will write them as \n (which is correct for JSON)
+          # Fix private_key format: add spaces in BEGIN/END markers if missing
           if 'private_key' in json_data:
               private_key = json_data['private_key']
-              # Handle escaped newlines: \\n -> \n, \n -> \n (actual newline)
+              
+              # Fix BEGIN PRIVATE KEY (add space if missing)
+              private_key = private_key.replace('-----BEGINPRIVATEKEY-----', '-----BEGIN PRIVATE KEY-----')
+              private_key = private_key.replace('-----BEGIN PRIVATEKEY-----', '-----BEGIN PRIVATE KEY-----')
+              
+              # Fix END PRIVATE KEY (add space if missing)
+              private_key = private_key.replace('-----ENDPRIVATEKEY-----', '-----END PRIVATE KEY-----')
+              private_key = private_key.replace('-----END PRIVATEKEY-----', '-----END PRIVATE KEY-----')
+              
+              # Handle escaped newlines
               if '\\\\n' in private_key:
                   private_key = private_key.replace('\\\\n', '\n')
               elif '\\n' in private_key:
                   private_key = private_key.replace('\\n', '\n')
+              
               json_data['private_key'] = private_key
 
-          # Write JSON file using json.dump()
-          # json.dump() will escape newlines as \n in the JSON string, which is correct
-          # Google auth library's from_service_account_file() will automatically
-          # convert the \n escape sequences back to actual newlines when parsing
+          # Write JSON file
           with open('service-account.json', 'w', encoding='utf-8') as f:
               json.dump(json_data, f, indent=2, ensure_ascii=False)
 
           print('service-account.json created successfully')
 
-          # Debug: Check file content
-          with open('service-account.json', 'r', encoding='utf-8') as f:
-              file_content_debug = f.read()
-              print(f'File size: {len(file_content_debug)} bytes')
-              # Check if private_key line exists
-              if '"private_key"' in file_content_debug:
-                  # Extract a portion of private_key line for debugging
-                  pk_line_start = file_content_debug.find('"private_key"')
-                  pk_line_end = min(pk_line_start + 300, len(file_content_debug))
-                  pk_line_preview = file_content_debug[pk_line_start:pk_line_end]
-                  print(f'private_key line preview: {repr(pk_line_preview[:200])}')
-                  # In JSON file, newlines are escaped as \n (this is correct)
-                  # Google auth library will handle this automatically
-                  if '\\n' in pk_line_preview:
-                      print('Note: File contains escaped newlines (\\n) - this is correct for JSON format')
-                  if 'BEGIN' in pk_line_preview:
-                      print('Good: private_key contains BEGIN marker')
-
-          # Verify - skip if there's an error (file may still work for Google auth)
+          # Verify
           try:
               with open('service-account.json', 'r', encoding='utf-8') as f:
                   verify_data = json.load(f)
                   if 'private_key' in verify_data:
                       pk = verify_data['private_key']
-                      if '\n' in pk and 'BEGIN' in pk and 'END' in pk:
-                          print('private_key verified: contains actual newlines and BEGIN/END markers')
+                      if '\n' in pk and 'BEGIN PRIVATE KEY' in pk and 'END PRIVATE KEY' in pk:
+                          print('✓ private_key verified: proper format with spaces')
                       else:
-                          print('WARNING: private_key may not have proper newlines', file=sys.stderr)
-                          has_newline = '\n' in pk
-                          has_begin = 'BEGIN' in pk
-                          print(f'private_key has newline: {has_newline}', file=sys.stderr)
-                          print(f'private_key has BEGIN: {has_begin}', file=sys.stderr)
-          except json.JSONDecodeError as e:
-              # Verification failed, but file might still work
-              print(f'Note: JSON verification failed: {e}', file=sys.stderr)
-              print('But file was created - Google auth library may still be able to read it', file=sys.stderr)
-
+                          print('WARNING: private_key may have issues', file=sys.stderr)
           except Exception as e:
-              print(f'Error: Failed to write service-account.json - {e}', file=sys.stderr)
-              import traceback
-              traceback.print_exc()
-              sys.exit(1)
+              print(f'Note: Verification issue: {e}', file=sys.stderr)
+
           PYTHON_SCRIPT
           python3 /tmp/create_service_account.py
           chmod 600 service-account.json
