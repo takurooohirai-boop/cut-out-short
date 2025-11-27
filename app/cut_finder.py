@@ -172,7 +172,7 @@ def _pick_segments_llm(
                 
         response = model.generate_content(
             full_prompt,
-            safety-settings=safety_settings
+            safety_settings=safety_settings,
             generation_config={
                 "temperature": 0.7,
                 "max_output_tokens": 1500,
