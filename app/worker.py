@@ -126,6 +126,22 @@ async def _phase_transcribe(job: Job, jobs_store: dict[str, Job]) -> None:
 
     log_info("Phase 2: Transcribing", job_id=job.job_id, stage="transcribing")
 
+        # 動画の長さをチェック（念のため二重チェック）
+    try:
+        duration = transcribe.get_video_duration(job.artifacts.local_in)
+        min_duration = job.inputs.options.min_sec
+        
+        if duration < min_duration:
+            log_error(
+                f"Video too short: {duration:.1f}s < {min_duration}s",
+                job_id=job.job_id
+            )
+            raise ValueError(f"Video duration ({duration:.1f}s) is shorter than minimum required ({min_duration}s)")
+    except Exception as e:
+        if "too short" in str(e).lower():
+            raise
+        log_warning(f"Could not check video duration: {e}", job_id=job.job_id)
+        
     try:
         srt_path, transcript_json = transcribe.transcribe_to_srt(
             in_mp4=job.artifacts.local_in,
