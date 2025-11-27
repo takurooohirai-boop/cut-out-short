@@ -151,8 +151,28 @@ def _pick_segments_llm(
         # プロンプトにシステム指示を含める
         full_prompt = "あなたはYouTubeショート動画の編集アシスタントです。JSON形式で応答してください。\n\n" + prompt
 
+        safety_settings = [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+            }
+        ]
+                
         response = model.generate_content(
             full_prompt,
+            safety-settings=safety_settings
             generation_config={
                 "temperature": 0.7,
                 "max_output_tokens": 1500,
