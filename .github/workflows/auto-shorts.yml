@@ -142,7 +142,7 @@ jobs:
 
           json_str = os.environ.get('YOUTUBE_TOKEN')
           if not json_str:
-              print('Warning: YOUTUBE_TOKEN_JSON secret is not set')
+              print('Warning: YOUTUBE_TOKEN secret is not set')
               print('Creating dummy YouTube token (YouTube upload will be skipped)')
               with open('credentials/youtube-token.json', 'w') as f:
                   json.dump({'token': 'dummy'}, f, indent=2)
