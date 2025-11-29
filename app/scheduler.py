@@ -78,6 +78,7 @@ async def main():
                 except Exception as e:
                     log_warning(f"Failed to check video duration: {e}")
                     Path(temp_check_path).unlink(missing_ok=True)
+                    
                 # 2. ジョブリクエストを作成
                 job_request = CreateJobRequest(
                     source_type="drive",
@@ -122,9 +123,9 @@ async def main():
 
                 log_info(f"Job completed: {len(result.outputs)} clips generated")
 
-                # 4. YouTubeに予約投稿（1日1本ペース）
+                # 4. YouTubeに予約投稿（既存予約と被らないように）
                 upload_dates = generate_upload_schedule(
-                    start_date=datetime.now() + timedelta(days=1),
+                    start_date=datetime.now(),
                     count=len(result.outputs)
                 )
 
@@ -230,23 +231,72 @@ async def main():
 def generate_upload_schedule(start_date: datetime, count: int) -> list[datetime]:
     """
     1日1本ペースでYouTube予約投稿の日時を生成
+    既存の予約と被らないように調整
 
     Args:
-        start_date: 最初の投稿日時
+        start_date: 基準日時（通常は現在時刻）
         count: 動画本数
 
     Returns:
         投稿日時のリスト
     """
-    # 毎日12:00 JSTに投稿するように調整
+    from app.sheets import get_sheet
+    
+    try:
+        # スプレッドシートから既存の予約を取得
+        sheet = get_sheet()
+        last_scheduled = get_last_scheduled_date(sheet)
+        
+        # 最後の予約の翌日から開始
+        if last_scheduled > start_date:
+            start_date = last_scheduled
+        
+        log_info(f"Scheduling starts from: {start_date}")
+        
+    except Exception as e:
+        log_warning(f"Failed to get existing schedules, using start_date as base: {e}")
+    
+    # スケジュールを生成
     schedule = []
     for i in range(count):
-        upload_time = start_date + timedelta(days=i)
+        upload_time = start_date + timedelta(days=i + 1)  # 翌日から開始
         # 時刻を12:00に固定
         upload_time = upload_time.replace(hour=12, minute=0, second=0, microsecond=0)
         schedule.append(upload_time)
 
     return schedule
+
+
+def get_last_scheduled_date(sheet):
+    """
+    スプレッドシートから最後の予約日時を取得
+    予約がない場合は現在時刻を返す
+    """
+    try:
+        all_records = sheet.get_all_records()
+        
+        scheduled_dates = []
+        for record in all_records:
+            date_str = record.get('date', '')
+            if date_str and date_str != '':
+                try:
+                    # "YYYY-MM-DD HH:MM" 形式をパース
+                    dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+                    scheduled_dates.append(dt)
+                except Exception as e:
+                    log_warning(f"Failed to parse date: {date_str}, error: {e}")
+        
+        if scheduled_dates:
+            last_date = max(scheduled_dates)
+            log_info(f"Last scheduled date found: {last_date}")
+            return last_date
+        else:
+            log_info("No existing schedules found, starting from now")
+            return datetime.now()
+    
+    except Exception as e:
+        log_warning(f"Failed to get last scheduled date: {e}")
+        return datetime.now()
 
 
 def _extract_segment_transcript(srt_path: str, start_sec: float, end_sec: float) -> str:
