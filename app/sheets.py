@@ -5,13 +5,17 @@ from pathlib import Path
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+import gspread
 
 from app.config import config
 from app.logging_utils import log_info, log_error, log_warning
 
 
 # Google Sheets API のスコープ
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
 
 
 def get_sheets_service():
@@ -37,6 +41,57 @@ def get_sheets_service():
     return build('sheets', 'v4', credentials=credentials)
 
 
+def get_sheet(spreadsheet_id: Optional[str] = None, worksheet_name: str = "CutoutShort"):
+    """
+    gspread を使ってワークシートオブジェクトを取得
+    
+    Args:
+        spreadsheet_id: スプレッドシートID（未指定の場合は環境変数から取得）
+        worksheet_name: ワークシート名（デフォルト: CutoutShort）
+    
+    Returns:
+        gspread.Worksheet オブジェクト
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    credentials_path = Path(config.GOOGLE_APPLICATION_CREDENTIALS)
+
+    if not credentials_path.exists():
+        raise FileNotFoundError(
+            f"Google Service Account credentials not found at {credentials_path}"
+        )
+
+    credentials = Credentials.from_service_account_file(
+        str(credentials_path),
+        scopes=SCOPES
+    )
+
+    gc = gspread.authorize(credentials)
+    spreadsheet = gc.open_by_key(spreadsheet_id)
+    
+    try:
+        worksheet = spreadsheet.worksheet(worksheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        # ワークシートが存在しない場合は作成
+        log_warning(f"Worksheet '{worksheet_name}' not found, creating new one")
+        worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=12)
+        
+        # ヘッダーを追加
+        headers = [
+            '投稿日時', 'タイトル', 'YouTube URL', '動画秒数',
+            '開始位置', '終了位置', '抽出方法', 'ステータス',
+            'Input Tokens', 'Output Tokens', 'Total Tokens', 'コスト (円)'
+        ]
+        worksheet.append_row(headers)
+        log_info(f"Created new worksheet '{worksheet_name}' with headers")
+    
+    return worksheet
+
+
 def record_to_sheet(
     data: Dict[str, Any],
     spreadsheet_id: Optional[str] = None,
@@ -48,7 +103,7 @@ def record_to_sheet(
     Args:
         data: 記録するデータ（辞書形式）
         spreadsheet_id: スプレッドシートID（未指定の場合は環境変数から取得）
-        range_name: 書き込み先の範囲（デフォルト: Sheet1!A:L）
+        range_name: 書き込み先の範囲（デフォルト: CutoutShort!A:L）
 
     Returns:
         APIレスポンス
@@ -180,7 +235,7 @@ def update_status(
     youtube_url: str,
     new_status: str,
     spreadsheet_id: Optional[str] = None,
-    range_name: str = "Sheet1!C:H"
+    range_name: str = "CutoutShort!C:H"
 ) -> Optional[Dict[str, Any]]:
     """
     YouTube URLを検索してステータスを更新
@@ -217,7 +272,7 @@ def update_status(
         for idx, row in enumerate(values, start=2):  # ヘッダー行をスキップ
             if row and len(row) > 0 and row[0] == youtube_url:
                 # ステータス列（H列 = 範囲内インデックス5）を更新
-                update_range = f"Sheet1!H{idx}"
+                update_range = f"CutoutShort!H{idx}"
 
                 body = {
                     'values': [[new_status]]
