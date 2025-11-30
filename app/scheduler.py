@@ -39,7 +39,7 @@ async def main():
         log_info(f"Found {len(video_folders)} video folder(s) to process")
 
         # 処理するフォルダごとの情報を収集
-        for folder_info in video_folders:
+        for folder_info in video_folders[:1]:
             try:
                 folder_id = folder_info['folder_id']
                 folder_name = folder_info['folder_name']
