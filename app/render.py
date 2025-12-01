@@ -18,7 +18,8 @@ def render_clipset(
     srt_path: str,
     segments: list[SegmentInfo],
     output_dir: Optional[str] = None,
-    job_id: Optional[str] = None
+    job_id: Optional[str] = None,
+    title: Optional[str] = None
 ) -> list[str]:
     """
     セグメントリストから複数のショート動画をレンダリング
@@ -65,7 +66,8 @@ def render_clipset(
                 start=segment.start,
                 end=segment.end,
                 output_path=str(output_path),
-                job_id=job_id
+                job_id=job_id,
+                title=title
             )
 
             rendered_files.append(str(output_path))
@@ -90,7 +92,8 @@ def _render_single_clip(
     start: float,
     end: float,
     output_path: str,
-    job_id: Optional[str]
+    job_id: Optional[str],
+    title: Optional[str] = None  # ← 追加
 ) -> None:
     """
     単一クリップをレンダリング
@@ -121,7 +124,19 @@ def _render_single_clip(
         "pad=1080:1920:(1080-iw)/2:(1920-ih)/2,"
         "setsar=1"
     )
-
+     if title:
+        # 特殊文字をエスケープ
+        escaped_title = title.replace("'", "\\'").replace(":", "\\:")
+        vf += (
+            f",drawtext=text='{escaped_title}'"
+            ":fontfile=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+            ":fontsize=48"
+            ":fontcolor=white"
+            ":borderw=3"
+            ":bordercolor=black"
+            ":x=(w-text_w)/2"
+            ":y=(h/2)-100"
+        )
     # オーディオフィルタ（音量正規化）
     af = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
