@@ -210,6 +210,7 @@ async def _phase_render(job: Job, jobs_store: dict[str, Job]) -> None:
             segments=job.artifacts.segments,
             output_dir=config.TMP_DIR,
             job_id=job.job_id
+            title=job.inputs.title_hint
         )
 
         job.artifacts.rendered_files = rendered_files
