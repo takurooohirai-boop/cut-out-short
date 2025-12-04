@@ -124,7 +124,7 @@ def _render_single_clip(
         "pad=1080:1920:(1080-iw)/2:(1920-ih)/2,"
         "setsar=1"
     )
-     if title:
+    if title:
         # 特殊文字をエスケープ
         escaped_title = title.replace("'", "\\'").replace(":", "\\:")
         vf += (
