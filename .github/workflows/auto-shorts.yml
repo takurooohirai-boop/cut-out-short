@@ -3,7 +3,7 @@ name: Auto Shorts Scheduler
 on:
   schedule:
     # 毎日 12:00 JST (03:00 UTC) に実行
-    - cron: '0 3 * * *'
+    - cron: ''
   workflow_dispatch:  # 手動実行も可能
 
 jobs:
