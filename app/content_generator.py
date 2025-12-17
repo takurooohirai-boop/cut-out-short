@@ -45,15 +45,15 @@ def _generate_with_gemini(transcript_text: str, source_url: Optional[str]) -> Di
     genai.configure(api_key=config.GEMINI_API_KEY)
     model = genai.GenerativeModel(config.GEMINI_MODEL)
 
-    # プロンプト作成
-    prompt = f"""以下の動画の文字起こしテキストから、YouTube Shorts用のタイトルと説明文を生成してください。
+    # プロンプト作成（タイトル8文字以内・ポイント10文字以内を明示）
+    prompt = f"""以下の文字起こしから、YouTube Shorts用のタイトルと説明文を生成してください。
 
 【文字起こし】
 {transcript_text[:1000]}
 
 【要件】
-- タイトル: 50文字以内、魅力的でクリックしたくなる内容
-- 説明文: 100文字程度、内容の要約とハッシュタグを含める
+- タイトル: 日本語で8文字以内。短く強い言葉で目を引くこと（例:「最強の裏技」「5秒で即答」）。記号乱用は避ける。
+- 説明文: 1行目にショート部分のポイントを10文字以内で書く。2行目以降で簡潔な補足とハッシュタグ（#Shorts含む）。
 - JSON形式で回答: {{"title": "タイトル", "description": "説明文"}}
 
 JSON形式のみで回答してください。"""
@@ -123,19 +123,26 @@ def _generate_fallback(
 
     log_info("Generating title and description with rule-based fallback")
 
-    # タイトル: 最初の50文字 + 要約
-    lines = transcript_text.strip().split('\n')
-    first_line = lines[0] if lines else fallback_title
-    title = first_line[:50].strip()
-    if len(first_line) > 50:
-        title += "..."
+    # 先頭文を抽出
+    sentences = re.split(r"[。？！\?]", transcript_text.strip()) if transcript_text else []
+    first_sentence = (sentences[0].strip() if sentences and sentences[0].strip() else fallback_title).replace("\n", " ")
 
-    # 説明文: 最初の100文字の要約
-    summary = transcript_text[:100].replace('\n', ' ').strip()
-    if len(transcript_text) > 100:
-        summary += "..."
+    def _hookify(text: str, limit: int) -> str:
+        t = text.strip()
+        if t.endswith("けど"):
+            t = t[:-2] + "？"
+        if t.endswith("けど、"):
+            t = t[:-3] + "？"
+        if len(t) > limit:
+            t = t[: limit - 1] + "…"
+        return t or fallback_title
 
-    description = summary
+    # タイトル: 12文字以内に強制
+    title = _hookify(first_sentence, 12)
+
+    # 説明文: 先頭行に18文字のポイントを置く
+    point = _hookify(first_sentence, 18)
+    description = point
 
     if source_url:
         description += f"\n\n📌 元動画: {source_url}"

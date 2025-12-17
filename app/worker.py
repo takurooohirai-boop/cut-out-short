@@ -8,7 +8,8 @@ from typing import Optional
 from app.config import config
 from app.logging_utils import log_info, log_error, log_warning, set_trace_id
 from app.models import Job, CreateJobRequest, OutputInfo, JobArtifacts, SegmentInfo
-from app import drive_io, yt, transcribe, cut_finder, render
+from app import drive_io, yt, transcribe, cut_finder, render, content_generator
+import re
 
 
 async def run_job(
@@ -204,13 +205,16 @@ async def _phase_render(job: Job, jobs_store: dict[str, Job]) -> None:
     log_info("Phase 4: Rendering clips", job_id=job.job_id, stage="rendering")
 
     try:
+        overlay_title, overlay_bottom = _build_overlay_texts(job)
+
         rendered_files = render.render_clipset(
             in_mp4=job.artifacts.local_in,
             srt_path=job.artifacts.srt_path,
             segments=job.artifacts.segments,
             output_dir=config.TMP_DIR,
             job_id=job.job_id,
-            title=job.inputs.title_hint
+            title=overlay_title,
+            bottom_text=overlay_bottom
         )
 
         job.artifacts.rendered_files = rendered_files
@@ -221,6 +225,122 @@ async def _phase_render(job: Job, jobs_store: dict[str, Job]) -> None:
     except Exception as e:
         log_error(f"Rendering failed: {e}", job_id=job.job_id, exc_info=True)
         raise
+
+
+def _build_overlay_texts(job: Job) -> tuple[str, str]:
+    """タイトルと下部テキストを生成（LLM→フォールバック）。"""
+    try:
+        transcript_text = " ".join(seg.text for seg in job.artifacts.transcript_json) or ""
+    except Exception:
+        transcript_text = ""
+
+    fallback_title = job.inputs.title_hint or "メインのタイトル"
+    try:
+        gen = content_generator.generate_title_and_description(
+            transcript_text=transcript_text or fallback_title,
+            source_url=None,
+            fallback_title=fallback_title,
+        )
+        generated_title = gen.get("title") or fallback_title
+        description = gen.get("description", "")
+        log_info(
+            "AI generated overlay text",
+            job_id=job.job_id,
+            meta={
+                "title_raw": (generated_title or "")[:80],
+                "description_head": (description or "").replace("\n", " ")[:120],
+            },
+        )
+    except Exception as e:
+        log_warning(f"Title generation failed, using fallback: {e}", job_id=job.job_id)
+        generated_title = fallback_title
+        description = ""
+
+    # 文字化け（?だらけなど）を検知してフォールバック
+    if _looks_garbled(generated_title):
+        generated_title = fallback_title
+    generated_title = _fit_overlay_text(generated_title, 12)
+
+    # 下部テキストは説明の先頭行/文から短く抽出
+    bottom_raw = _shorten_bottom_text(description, max_len=24)
+    bottom = bottom_raw or "動画のポイント"
+    if _looks_garbled(bottom):
+        bottom = "動画のポイント"
+    bottom = _fit_overlay_text(bottom, 18)
+    log_info(
+        "Overlay text after validation",
+        job_id=job.job_id,
+        meta={
+            "title": generated_title,
+            "bottom": bottom,
+        },
+    )
+    return generated_title, bottom
+
+
+def _shorten_bottom_text(description: str, max_len: int = 20) -> str:
+    """説明文から先頭の短いフレーズを抽出."""
+    if not description:
+        return ""
+    # 1行目を取得し、ハッシュタグ以降は削除
+    first_line = description.splitlines()[0]
+    first_line = first_line.split("#")[0]
+    first_line = re.sub(r"\s+", " ", first_line).strip()
+    if not first_line:
+        return ""
+    if len(first_line) > max_len:
+        return first_line[:max_len] + "…"
+    return first_line
+
+
+def _fit_overlay_text(text: str, max_len: int) -> str:
+    """オーバーレイ用に長さを制限（超過は末尾を省略記号で短縮）。"""
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 1] + "…"
+
+
+def _looks_garbled(text: str) -> bool:
+    """'?'や置換文字が多い/日本語が無い場合は文字化けとみなす."""
+    if not text:
+        return True
+
+    s = text.strip()
+    if not s:
+        return True
+
+    total = len(s)
+    bad = s.count("?") + s.count("？") + s.count("\ufffd")
+    q_ratio = bad / total
+    has_cjk = any("\u3040" <= c <= "\u30ff" or "\u4e00" <= c <= "\u9fff" for c in s)
+    non_ascii = sum(1 for c in s if ord(c) > 127)
+    non_ascii_ratio = non_ascii / total
+
+    # 置換文字や?が1文字でもあれば問答無用で弾く
+    if bad > 0:
+        return True
+
+    # 反復しがちな文字列（？？？など）は日本語が無ければ弾く
+    no_space = s.replace(" ", "")
+    repetitive = len(set(no_space)) <= 2 and len(no_space) >= 4
+    mojibake_markers = ("縺", "繧", "蜿", "遘", "鬮", "髢", "邱")
+
+    # 全角含む?や置換文字が20%以上、もしくは日本語無しで?が混入/同一文字ばかりならNG
+    if q_ratio >= 0.2 or (not has_cjk and (q_ratio > 0 or repetitive)):
+        return True
+
+    # 日本語が無く、ASCIIを超える文字（文字化けパターン）が3割超ならNG（例: ã„ã§ã‚“）
+    if not has_cjk and non_ascii_ratio > 0.3:
+        return True
+
+    # CP932系の文字化けでよく出る文字が含まれていればNG
+    if any(marker in s for marker in mojibake_markers):
+        return True
+
+    return False
 
 
 async def _phase_upload(job: Job, jobs_store: dict[str, Job]) -> None:

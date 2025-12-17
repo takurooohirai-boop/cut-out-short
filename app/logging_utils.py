@@ -45,7 +45,7 @@ class JSONFormatter(logging.Formatter):
 
 
 def setup_logging(level: str = "INFO") -> None:
-    """ロギングをセットアップ"""
+    """ロギングをセットアップ（コンソールをUTF-8に寄せる）"""
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
@@ -53,8 +53,14 @@ def setup_logging(level: str = "INFO") -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # 標準出力へのハンドラを追加
-    handler = logging.StreamHandler(sys.stdout)
+    # Windowsコンソールのcp932問題を避けるため、UTF-8ストリームを試す
+    try:
+        utf8_stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+        stream = utf8_stdout
+    except Exception:
+        stream = sys.stdout
+
+    handler = logging.StreamHandler(stream)
     handler.setFormatter(JSONFormatter())
     root_logger.addHandler(handler)
 
