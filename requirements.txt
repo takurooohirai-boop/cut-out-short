@@ -20,6 +20,7 @@ google-generativeai==0.8.3
 
 # Video Processing
 yt-dlp==2024.10.7
+Pillow==11.0.0
 
 # Utilities
 python-dotenv==1.0.1
