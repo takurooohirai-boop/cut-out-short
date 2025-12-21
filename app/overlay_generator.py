@@ -76,6 +76,20 @@ def _draw_dilated_glow(
     base_img.paste(temp, (0, 0), temp)
 
 
+def _wrap_text(text: str, max_chars_per_line: int = 10) -> str:
+    """テキストを指定文字数で改行する"""
+    if len(text) <= max_chars_per_line:
+        return text
+
+    # 句読点や区切りで分割を試みる
+    for i in range(max_chars_per_line, 0, -1):
+        if i < len(text) and text[i] in ['、', '。', '！', '？', '!', '?', ' ']:
+            return text[:i+1] + '\n' + text[i+1:]
+
+    # 区切りがない場合は単純に分割
+    return text[:max_chars_per_line] + '\n' + text[max_chars_per_line:]
+
+
 def generate_overlay_card(
     output_path: str,
     top_text: str,
@@ -103,6 +117,7 @@ def generate_overlay_card(
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
     # 小さいテキスト用は日本語フォント、タイトルと下部テキストはkeifont（日本語対応フォントにフォールバック）
+    # 参考画像のように大きなフォントサイズに
     font_small = _load_font(meiryo_path, 54)
     font_title = _load_font(keifont_path, 86)
     font_bottom = _load_font(keifont_path, 70)
@@ -117,6 +132,10 @@ def generate_overlay_card(
     gap_big = 90
     bottom_gap = 100
 
+    # テキストを2行に改行
+    title_wrapped = _wrap_text(title_text, max_chars_per_line=10)
+    bottom_wrapped = _wrap_text(bottom_text, max_chars_per_line=10)
+
     draw = ImageDraw.Draw(img)
     draw.text(
         (center_x, rect_top - gap_small),
@@ -129,21 +148,23 @@ def generate_overlay_card(
     _draw_dilated_glow(
         base_img=img,
         pos=(center_x, rect_top - gap_big),
-        text=title_text,
+        text=title_wrapped,
         font=font_title,
         fill=(0, 0, 0, 255),
         stroke_fill=(255, 215, 0, 255),
         glow_color=(255, 230, 0, 255),
     )
 
-    _draw_dilated_glow(
-        base_img=img,
-        pos=(center_x, rect_bottom + bottom_gap),
-        text=bottom_text,
+    # 下部テキストはグローなしで描画（赤縁のみ）
+    tdraw_bottom = ImageDraw.Draw(img)
+    tdraw_bottom.text(
+        (center_x, rect_bottom + bottom_gap),
+        bottom_wrapped,
         font=font_bottom,
         fill=(255, 255, 255, 255),
+        stroke_width=14,
         stroke_fill=(220, 0, 0, 255),
-        glow_color=(255, 230, 0, 255),
+        anchor="mm",
     )
 
     out_path = Path(output_path)

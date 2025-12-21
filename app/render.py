@@ -24,6 +24,7 @@ def render_clipset(
     job_id: Optional[str] = None,
     title: Optional[str] = None,
     bottom_text: Optional[str] = None,
+    top_text: Optional[str] = None,
 ) -> list[str]:
     """
     セグメントリストから複数のショート動画をレンダリングする.
@@ -58,6 +59,7 @@ def render_clipset(
                 job_id=job_id,
                 title=title,
                 bottom_text=bottom_text,
+                top_text=top_text,
             )
 
             rendered_files.append(str(output_path))
@@ -83,13 +85,14 @@ def _render_single_clip(
     job_id: Optional[str],
     title: Optional[str] = None,
     bottom_text: Optional[str] = None,
+    top_text: Optional[str] = None,
 ) -> None:
     """
     単一クリップをレンダリング（9:16 1080x1920、レターボックス、グローオーバーレイ付き）.
     """
     duration = end - start
 
-    overlay_top = "音楽業界社長が語る!!"
+    overlay_top = top_text or "音楽業界社長が語る!!"
     overlay_title = title or "メインのタイトル"
     overlay_bottom = bottom_text or "動画のポイントとか"
 

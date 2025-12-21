@@ -89,6 +89,87 @@ def pick_segments(
         raise CutFinderError(f"Segment extraction error: {e}") from e
 
 
+def _extract_json_from_response(content: str, job_id: Optional[str] = None) -> list | dict:
+    """
+    LLMレスポンスから堅牢にJSONを抽出してパース
+
+    Args:
+        content: LLMレスポンステキスト
+        job_id: ジョブID（ログ用）
+
+    Returns:
+        パースされたJSON（list または dict）
+
+    Raises:
+        json.JSONDecodeError: JSON抽出・パースに失敗した場合
+        ValueError: 有効なJSONが見つからない場合
+    """
+    import re
+
+    original_content = content
+
+    # 1. マークダウンコードブロックを除去
+    if "```json" in content:
+        parts = content.split("```json")
+        if len(parts) > 1:
+            content = parts[1].split("```")[0].strip()
+    elif "```" in content:
+        parts = content.split("```")
+        if len(parts) > 1:
+            content = parts[1].split("```")[0].strip()
+
+    # 2. JSON配列またはオブジェクトを正規表現で抽出
+    # まず完全な配列を探す
+    complete_array_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
+    if complete_array_match:
+        content = complete_array_match.group()
+    else:
+        # 不完全な配列も探す（レスポンスが途中で切れている場合）
+        incomplete_array_match = re.search(r'\[\s*\{.*', content, re.DOTALL)
+        if incomplete_array_match:
+            content = incomplete_array_match.group()
+            # 配列を強制的に閉じる
+            if not content.rstrip().endswith(']'):
+                # 最後のオブジェクトを閉じる
+                if not content.rstrip().endswith('}'):
+                    content = content.rstrip().rstrip(',') + '}'
+                content = content + ']'
+        else:
+            # オブジェクトを探す
+            obj_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if obj_match:
+                content = obj_match.group()
+            else:
+                # 不完全なオブジェクト
+                incomplete_obj_match = re.search(r'\{.*', content, re.DOTALL)
+                if incomplete_obj_match:
+                    content = incomplete_obj_match.group()
+                    if not content.rstrip().endswith('}'):
+                        content = content.rstrip().rstrip(',') + '}'
+
+    # 3. よくある問題を修正
+    # - 末尾のカンマを削除
+    content = re.sub(r',\s*}', '}', content)
+    content = re.sub(r',\s*\]', ']', content)
+    # - 不完全なキー:値のペアを修正（値がない場合）
+    content = re.sub(r':\s*([,}\]])', r': null\1', content)
+
+    try:
+        parsed = json.loads(content)
+        log_info(f"Successfully parsed JSON: {type(parsed).__name__}", job_id=job_id)
+        return parsed
+    except json.JSONDecodeError as e:
+        # デバッグ用に問題箇所を表示
+        error_line = content.split('\n')[e.lineno - 1] if e.lineno <= len(content.split('\n')) else ""
+        log_error(
+            f"JSON parse failed at line {e.lineno}, col {e.colno}: {e.msg}\n"
+            f"Error line: {error_line[:100]}\n"
+            f"Full JSON content:\n{content}",
+            job_id=job_id
+        )
+        raise
+
+
 def _pick_segments_llm(
     transcript_json: list[TranscriptSegment],
     target_num: int,
@@ -175,21 +256,22 @@ def _pick_segments_llm(
             safety_settings=safety_settings,
             generation_config={
                 "temperature": 0.7,
-                "max_output_tokens": 1500,
+                "max_output_tokens": 3000,  # 日本語対応のため増やす (1500 -> 3000)
             }
         )
 
         content = response.text
         log_info(f"LLM response received ({len(content)} chars)", job_id=job_id)
 
-        # JSONをパース
-        # マークダウンのコードブロックを除去
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
+        # レスポンスが短すぎる場合は詳細をログ出力
+        if len(content) < 200:
+            log_warning(f"Response too short ({len(content)} chars). Full content: {content}", job_id=job_id)
+            log_warning(f"Response candidates: {response.candidates if hasattr(response, 'candidates') else 'N/A'}", job_id=job_id)
+            if hasattr(response, 'prompt_feedback'):
+                log_warning(f"Prompt feedback: {response.prompt_feedback}", job_id=job_id)
 
-        candidates = json.loads(content)
+        # JSONをパース - より堅牢な抽出
+        candidates = _extract_json_from_response(content, job_id=job_id)
 
         # SegmentInfoに変換
         segments = []
