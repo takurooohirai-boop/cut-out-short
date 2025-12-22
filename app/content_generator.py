@@ -95,7 +95,7 @@ def generate_title_and_description(
     # Gemini APIが使える場合はAI生成
     if config.GEMINI_API_KEY:
         try:
-            return _generate_with_gemini(transcript_text, source_url)
+            return _generate_with_gemini(transcript_text, source_url, fallback_title)
         except Exception as e:
             log_warning(f"Gemini API failed, using fallback: {e}")
 
@@ -103,7 +103,7 @@ def generate_title_and_description(
     return _generate_fallback(transcript_text, source_url, fallback_title)
 
 
-def _generate_with_gemini(transcript_text: str, source_url: Optional[str]) -> Dict[str, str]:
+def _generate_with_gemini(transcript_text: str, source_url: Optional[str], fallback_title: str) -> Dict[str, str]:
     """Gemini APIでタイトルと説明文を生成"""
 
     log_info("Generating title and description with Gemini API")
@@ -199,11 +199,22 @@ JSON形式のみで回答してください。"""
         title = result.get("title", "").strip()
         description = result.get("description", "").strip()
 
-        # 元動画URLを追加
-        if source_url:
-            description += f"\n\n📌 元動画: {source_url}"
+        # titleまたはdescriptionが空の場合はフォールバックを使用
+        if not title or not description:
+            log_warning(f"Incomplete Gemini response (title: {bool(title)}, description: {bool(description)}), using fallback")
+            fallback_result = _generate_fallback(transcript_text, source_url, fallback_title)
 
-        description += "\n\n#Shorts"
+            # 空のフィールドをフォールバックで補完
+            if not title:
+                title = fallback_result["title"]
+            if not description:
+                description = fallback_result["description"]
+        else:
+            # 元動画URLを追加
+            if source_url:
+                description += f"\n\n📌 元動画: {source_url}"
+
+            description += "\n\n#Shorts"
 
         log_info(f"Generated title: {title}")
         return {
@@ -244,6 +255,35 @@ def _generate_fallback(
             t = t[:limit]
         return t or fallback_title
 
+    def _create_teaser_point(text: str, limit: int = 20) -> str:
+        """動画のポイントを「●●でいること」のような伏せ字形式で作成"""
+        t = text.strip()
+
+        # 「...」や「…」を除去してクリーンアップ
+        t_clean = t.replace('...', '').replace('…', '').strip()
+
+        # 文末が「いること」「すること」「なること」などの場合、重要部分を伏せ字に
+        patterns = [
+            (r'(.+)(でいること|にいること)$', r'●●\2'),  # 「〇〇でいること」→「●●でいること」
+            (r'(.+)(ですること|にすること|をすること)$', r'●●\2'),  # 「〇〇すること」→「●●すること」
+            (r'(.+)(になること)$', r'●●\2'),  # 「〇〇になること」→「●●になること」
+            (r'(.+)(が重要|が大事|がポイント)$', r'●●\2'),  # 「〇〇が重要」→「●●が重要」
+            (r'(.+)(であること|であること)$', r'●●\2'),  # 「〇〇であること」→「●●であること」
+        ]
+
+        for pattern, replacement in patterns:
+            match = re.search(pattern, t_clean)
+            if match:
+                result = re.sub(pattern, replacement, t_clean)
+                # 長さ調整
+                if len(result) > limit:
+                    # 末尾から逆算してlimit文字に収める
+                    result = '●●' + result[-(limit-2):]
+                return result + '！'
+
+        # パターンにマッチしない場合は通常のhookify
+        return _hookify(t, limit)
+
     # タイトル: 最初の文をテーマとして使用（20文字以内）
     first_sentence = sentences[0] if sentences else fallback_title
     title = _hookify(first_sentence.replace("\n", " "), 20)
@@ -251,14 +291,14 @@ def _generate_fallback(
     # ポイント: 2番目の文または最初の文の続きを使用（タイトルと異なる内容にする）
     if len(sentences) > 1:
         second_sentence = sentences[1]
-        point = _hookify(second_sentence.replace("\n", " "), 20)
+        point = _create_teaser_point(second_sentence.replace("\n", " "), 20)
     else:
         # 1文しかない場合は、文の後半部分を使う
         words = first_sentence.split()
         if len(words) > 3:
-            point = _hookify(" ".join(words[len(words)//2:]).replace("\n", " "), 20)
+            point = _create_teaser_point(" ".join(words[len(words)//2:]).replace("\n", " "), 20)
         else:
-            point = _hookify("内容をチェック", 20)
+            point = _hookify("続きをチェック！", 20)
     description = point
 
     if source_url:

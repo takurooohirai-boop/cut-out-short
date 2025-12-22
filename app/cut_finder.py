@@ -151,6 +151,8 @@ def _extract_json_from_response(content: str, job_id: Optional[str] = None) -> l
     # - 末尾のカンマを削除
     content = re.sub(r',\s*}', '}', content)
     content = re.sub(r',\s*\]', ']', content)
+    # - 不完全な数値を修正 (例: "score": 0.} -> "score": 0.0})
+    content = re.sub(r':\s*(\d+\.)\s*([,}\]])', r': \g<1>0\2', content)
     # - 不完全なキー:値のペアを修正（値がない場合）
     content = re.sub(r':\s*([,}\]])', r': null\1', content)
 

@@ -128,7 +128,7 @@ def generate_overlay_card(
     rect_right = rect_left + rect_w
     rect_bottom = rect_top + rect_h
     center_x = width / 2
-    gap_small = 260
+    gap_small = 320  # 260から320に増やして上に配置
     gap_big = 90
     bottom_gap = 100
 
