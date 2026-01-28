@@ -18,6 +18,7 @@ class Config:
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     DRIVE_INPUT_FOLDER_ID: str = os.getenv("DRIVE_INPUT_FOLDER_ID", "")
     DRIVE_READY_FOLDER_ID: str = os.getenv("DRIVE_READY_FOLDER_ID", "")
+    DRIVE_OUTPUT_FOLDER_ID: str = os.getenv("DRIVE_OUTPUT_FOLDER_ID", "")
 
     # Whisper設定
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "small")  # tiny|base|small|medium|large
@@ -30,6 +31,12 @@ class Config:
 
     # Google Sheets設定
     SPREADSHEET_ID: Optional[str] = os.getenv("SPREADSHEET_ID")
+    SHEET_YOUTUBERS: str = os.getenv("SHEET_YOUTUBERS", "YouTubers")
+    SHEET_UPLOAD_LOG: str = os.getenv("SHEET_UPLOAD_LOG", "UploadLog")
+
+    # YouTube OAuth設定（マルチYouTuber用）
+    YOUTUBE_CLIENT_ID: str = os.getenv("YOUTUBE_CLIENT_ID", "")
+    YOUTUBE_CLIENT_SECRET: str = os.getenv("YOUTUBE_CLIENT_SECRET", "")
 
     # ジョブ管理
     MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "3"))

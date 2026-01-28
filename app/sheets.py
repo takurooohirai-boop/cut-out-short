@@ -1,6 +1,7 @@
-"""Google Sheets 記録機能"""
-from typing import Dict, Any, Optional
+"""Google Sheets 記録機能 + YouTuber管理"""
+from typing import Dict, Any, Optional, List
 from pathlib import Path
+from datetime import datetime
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -9,6 +10,7 @@ import gspread
 
 from app.config import config
 from app.logging_utils import log_info, log_error, log_warning
+from app.youtube_channel import YouTuberInfo
 
 
 # Google Sheets API のスコープ
@@ -296,4 +298,172 @@ def update_status(
         raise
     except Exception as e:
         log_error(f"Failed to update status: {e}", exc_info=True)
+        raise
+
+
+# ===========================================
+# YouTuber管理機能
+# ===========================================
+
+def get_youtubers(
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "YouTubers"
+) -> List[YouTuberInfo]:
+    """
+    YouTubersシートから有効な契約者リストを取得
+
+    Args:
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+
+    Returns:
+        YouTuberInfoのリスト
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    log_info(f"Fetching YouTubers from sheet: {sheet_name}")
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+        all_values = worksheet.get_all_values()
+
+        if len(all_values) <= 1:
+            log_info("No YouTubers found in sheet")
+            return []
+
+        youtubers = []
+        # ヘッダー行をスキップ（index 0）
+        for row_idx, row in enumerate(all_values[1:], start=2):
+            if len(row) < 6:
+                continue
+
+            # 有効フラグをチェック（C列）
+            enabled = str(row[2]).upper() in ('TRUE', '1', 'YES', 'はい')
+
+            if not enabled:
+                continue
+
+            youtuber = YouTuberInfo(
+                name=row[0],
+                channel_id=row[1],
+                enabled=enabled,
+                last_video_id=row[3] if len(row) > 3 and row[3] else None,
+                last_processed_date=row[4] if len(row) > 4 and row[4] else None,
+                refresh_token=row[5] if len(row) > 5 else "",
+                row_index=row_idx
+            )
+
+            if youtuber.refresh_token:
+                youtubers.append(youtuber)
+            else:
+                log_warning(f"YouTuber {youtuber.name} has no refresh token, skipping")
+
+        log_info(f"Found {len(youtubers)} active YouTubers")
+        return youtubers
+
+    except Exception as e:
+        log_error(f"Failed to fetch YouTubers: {e}", exc_info=True)
+        raise
+
+
+def update_youtuber_last_video(
+    row_index: int,
+    video_id: str,
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "YouTubers"
+) -> None:
+    """
+    YouTuberの最終処理動画IDと日時を更新
+
+    Args:
+        row_index: スプシの行番号
+        video_id: 処理した動画ID
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    log_info(f"Updating last video for row {row_index}: {video_id}")
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+
+        # D列（最終処理動画ID）とE列（最終処理日）を更新
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        worksheet.update(f"D{row_index}:E{row_index}", [[video_id, now]])
+
+        log_info(f"Updated row {row_index}: video_id={video_id}, date={now}")
+
+    except Exception as e:
+        log_error(f"Failed to update YouTuber last video: {e}", exc_info=True)
+        raise
+
+
+def record_upload(
+    youtuber_name: str,
+    channel_id: str,
+    source_video_id: str,
+    short_title: str,
+    short_url: str,
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "UploadLog"
+) -> None:
+    """
+    アップロード記録をUploadLogシートに追加
+
+    Args:
+        youtuber_name: YouTuber名
+        channel_id: チャンネルID
+        source_video_id: 元動画のID
+        short_title: ショート動画のタイトル
+        short_url: ショート動画のURL
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    log_info(f"Recording upload: {short_title}")
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+
+        # ヘッダーがなければ追加
+        headers = worksheet.row_values(1)
+        if not headers:
+            worksheet.append_row([
+                'アップロード日時',
+                'YouTuber名',
+                'チャンネルID',
+                '元動画ID',
+                'ショートタイトル',
+                'ショートURL'
+            ])
+
+        # 記録を追加
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        worksheet.append_row([
+            now,
+            youtuber_name,
+            channel_id,
+            source_video_id,
+            short_title,
+            short_url
+        ])
+
+        log_info(f"Upload recorded: {short_url}")
+
+    except Exception as e:
+        log_error(f"Failed to record upload: {e}", exc_info=True)
         raise

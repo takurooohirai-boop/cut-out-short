@@ -1,4 +1,4 @@
-name: Auto Shorts Scheduler
+name: Multi-YouTuber Auto Shorts
 
 on:
   schedule:
@@ -24,7 +24,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-                
+
       - name: Install Japanese fonts
         run: |
           sudo apt-get update
@@ -66,134 +66,71 @@ jobs:
               print(f'Error: Invalid JSON - {parse_error}', file=sys.stderr)
               sys.exit(1)
 
-          # Fix private_key format: add spaces in BEGIN/END markers if missing
+          # Fix private_key format
           if 'private_key' in json_data:
               private_key = json_data['private_key']
-              
-              # Fix BEGIN PRIVATE KEY (add space if missing)
               private_key = private_key.replace('-----BEGINPRIVATEKEY-----', '-----BEGIN PRIVATE KEY-----')
               private_key = private_key.replace('-----BEGIN PRIVATEKEY-----', '-----BEGIN PRIVATE KEY-----')
-              
-              # Fix END PRIVATE KEY (add space if missing)
               private_key = private_key.replace('-----ENDPRIVATEKEY-----', '-----END PRIVATE KEY-----')
               private_key = private_key.replace('-----END PRIVATEKEY-----', '-----END PRIVATE KEY-----')
-              
-              # Handle escaped newlines
+
               if '\\\\n' in private_key:
                   private_key = private_key.replace('\\\\n', '\n')
               elif '\\n' in private_key:
                   private_key = private_key.replace('\\n', '\n')
-              
+
               json_data['private_key'] = private_key
 
-          # Write JSON file
           with open('service-account.json', 'w', encoding='utf-8') as f:
               json.dump(json_data, f, indent=2, ensure_ascii=False)
 
           print('service-account.json created successfully')
-
-          # Verify
-          try:
-              with open('service-account.json', 'r', encoding='utf-8') as f:
-                  verify_data = json.load(f)
-                  if 'private_key' in verify_data:
-                      pk = verify_data['private_key']
-                      if '\n' in pk and 'BEGIN PRIVATE KEY' in pk and 'END PRIVATE KEY' in pk:
-                          print('✓ private_key verified: proper format with spaces')
-                      else:
-                          print('WARNING: private_key may have issues', file=sys.stderr)
-          except Exception as e:
-              print(f'Note: Verification issue: {e}', file=sys.stderr)
-
           PYTHON_SCRIPT
           python3 /tmp/create_service_account.py
           chmod 600 service-account.json
 
-      # YouTube認証の設定（オプション - Secretsが設定されていない場合はスキップ）
-      - name: Set up YouTube client secret
-        env:
-          YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
-        run: |
-          python3 -c "
-          import json
-          import os
-          import sys
-
-          json_str = os.environ.get('YOUTUBE_CLIENT_SECRET_JSON')
-          if not json_str:
-              print('Warning: YOUTUBE_CLIENT_SECRET_JSON secret is not set')
-              print('Creating dummy YouTube credentials (YouTube upload will be skipped)')
-              with open('credentials/youtube-client-secret.json', 'w') as f:
-                  json.dump({'installed': {'client_id': 'dummy'}}, f, indent=2)
-          else:
-              try:
-                  json_data = json.loads(json_str)
-                  with open('credentials/youtube-client-secret.json', 'w') as f:
-                      json.dump(json_data, f, indent=2)
-                  print('youtube-client-secret.json created successfully')
-              except json.JSONDecodeError as e:
-                  print(f'Error: Invalid JSON - {e}', file=sys.stderr)
-                  sys.exit(1)
-          "
-
-      - name: Set up YouTube token
-        env:
-          YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
-        run: |
-          python3 -c "
-          import json
-          import os
-          import sys
-
-          json_str = os.environ.get('YOUTUBE_TOKEN')
-          if not json_str:
-              print('Warning: YOUTUBE_TOKEN secret is not set')
-              print('Creating dummy YouTube token (YouTube upload will be skipped)')
-              with open('credentials/youtube-token.json', 'w') as f:
-                  json.dump({'token': 'dummy'}, f, indent=2)
-          else:
-              try:
-                  json_data = json.loads(json_str)
-                  with open('credentials/youtube-token.json', 'w') as f:
-                      json.dump(json_data, f, indent=2)
-                  print('youtube-token.json created successfully')
-              except json.JSONDecodeError as e:
-                  print(f'Error: Invalid JSON - {e}', file=sys.stderr)
-                  sys.exit(1)
-          "
-
       - name: Create .env file
         env:
-          DRIVE_INPUT_FOLDER_ID: ${{ secrets.DRIVE_INPUT_FOLDER_ID }}
-          DRIVE_READY_FOLDER_ID: ${{ secrets.DRIVE_READY_FOLDER_ID }}
+          DRIVE_OUTPUT_FOLDER_ID: ${{ secrets.DRIVE_OUTPUT_FOLDER_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
         run: |
           cat > .env << EOF
+          # ===========================================
+          # Multi-YouTuber Auto Shorts System
+          # ===========================================
+
           # API認証（GitHub Actionsでは不要）
           MAKE_SHARED_SECRET=not_used_in_actions
 
-          # Google Drive設定（環境変数で上書きされる）
+          # Google API設定
           GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
-          DRIVE_INPUT_FOLDER_ID=${DRIVE_INPUT_FOLDER_ID}
-          DRIVE_READY_FOLDER_ID=${DRIVE_READY_FOLDER_ID}
+          GEMINI_API_KEY=${GEMINI_API_KEY}
+
+          # Google Drive設定
+          DRIVE_OUTPUT_FOLDER_ID=${DRIVE_OUTPUT_FOLDER_ID}
+
+          # Google Sheets設定
+          SPREADSHEET_ID=${SPREADSHEET_ID}
+          SHEET_YOUTUBERS=YouTubers
+          SHEET_UPLOAD_LOG=UploadLog
+
+          # YouTube OAuth設定
+          YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID}
+          YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET}
 
           # Whisper設定
           WHISPER_MODEL=small
           WHISPER_DEVICE=cpu
           WHISPER_COMPUTE_TYPE=int8
 
-          # Gemini設定
-          GEMINI_API_KEY=${GEMINI_API_KEY}
-          GEMINI_MODEL=gemini-2.5-flash-lite
-
-          # Google Sheets設定
-          SPREADSHEET_ID=${SPREADSHEET_ID}
+          # Gemini LLM設定
+          GEMINI_MODEL=gemini-2.0-flash
 
           # ジョブ管理
           MAX_CONCURRENT_JOBS=3
-
-          # 一時ファイルディレクトリ
           TMP_DIR=./runout
 
           # タイムアウト設定（秒）
@@ -213,12 +150,11 @@ jobs:
       - name: Create output directory
         run: mkdir -p runout
 
-      - name: Run scheduler
+      - name: Run Multi-YouTuber scheduler
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
-        run: python -m app.scheduler
+        run: python -m app.multi_scheduler
 
-      # 追加：生成物を常にアップロード
       - name: Upload generated shorts
         if: always()
         uses: actions/upload-artifact@v4
@@ -229,4 +165,3 @@ jobs:
             runout/*.srt
           if-no-files-found: ignore
           retention-days: 7
-
