@@ -150,9 +150,22 @@ jobs:
       - name: Create output directory
         run: mkdir -p runout
 
+      - name: Set up YouTube cookies
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          if [ -n "$YOUTUBE_COOKIES" ]; then
+            echo "$YOUTUBE_COOKIES" > youtube_cookies.txt
+            chmod 600 youtube_cookies.txt
+            echo "YouTube cookies file created"
+          else
+            echo "No YouTube cookies configured (YOUTUBE_COOKIES secret not set)"
+          fi
+
       - name: Run Multi-YouTuber scheduler
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
+          YOUTUBE_COOKIES_PATH: ${{ github.workspace }}/youtube_cookies.txt
         run: python -m app.multi_scheduler
 
       - name: Upload generated shorts

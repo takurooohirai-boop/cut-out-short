@@ -1,15 +1,20 @@
 """yt-dlpラッパー - YouTube動画ダウンロード"""
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
 
 from app.config import config
-from app.logging_utils import log_info, log_error
+from app.logging_utils import log_info, log_error, log_warning
 
 
 class YtDlpError(Exception):
     """yt-dlp例外"""
     pass
+
+
+# Cookiesファイルパス（環境変数から取得）
+YOUTUBE_COOKIES_PATH = os.getenv("YOUTUBE_COOKIES_PATH", "")
 
 
 def download_youtube_video(
@@ -46,8 +51,16 @@ def download_youtube_video(
         "--output", output_path,
         "--no-playlist",  # プレイリストの場合は最初の動画のみ
         "--no-warnings",
-        url
     ]
+
+    # Cookiesファイルがあれば使用（Bot検出回避）
+    if YOUTUBE_COOKIES_PATH and Path(YOUTUBE_COOKIES_PATH).exists():
+        cmd.extend(["--cookies", YOUTUBE_COOKIES_PATH])
+        log_info("Using YouTube cookies for authentication", job_id=job_id)
+    else:
+        log_warning("No YouTube cookies found, may be blocked by YouTube", job_id=job_id)
+
+    cmd.append(url)
 
     try:
         log_info(
@@ -114,8 +127,13 @@ def get_video_info(url: str, job_id: Optional[str] = None) -> dict:
         "yt-dlp",
         "--dump-json",
         "--no-playlist",
-        url
     ]
+
+    # Cookiesファイルがあれば使用
+    if YOUTUBE_COOKIES_PATH and Path(YOUTUBE_COOKIES_PATH).exists():
+        cmd.extend(["--cookies", YOUTUBE_COOKIES_PATH])
+
+    cmd.append(url)
 
     try:
         result = subprocess.run(
