@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class JobOptions(BaseModel):
     """ジョブオプション"""
-    target_count: int = Field(default=5, ge=3, le=8, description="生成する動画の本数（3〜8）")
+    target_count: int = Field(default=5, ge=1, le=8, description="生成する動画の本数（1〜8）")
     min_sec: int = Field(default=25, ge=10, le=60, description="最小秒数")
     max_sec: int = Field(default=45, ge=20, le=90, description="最大秒数")
     render_preset: str = Field(default="v1", description="レンダリングプリセット名")
