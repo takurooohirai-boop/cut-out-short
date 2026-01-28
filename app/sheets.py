@@ -467,3 +467,237 @@ def record_upload(
     except Exception as e:
         log_error(f"Failed to record upload: {e}", exc_info=True)
         raise
+
+
+# ===========================================
+# ShortsQueue機能（ショート動画のストック管理）
+# ===========================================
+
+SHORTS_QUEUE_HEADERS = [
+    'YouTuber名',
+    'チャンネルID',
+    '元動画ID',
+    'ファイルパス',
+    'タイトル',
+    '説明文',
+    'スコア',
+    '選定理由',
+    '開始秒',
+    '終了秒',
+    'ステータス',
+    'アップロード日時',
+    'ショートURL',
+    '作成日時'
+]
+
+
+def get_pending_shorts(
+    channel_id: str,
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "ShortsQueue"
+) -> List[dict]:
+    """
+    未アップロードのショート動画を取得
+
+    Args:
+        channel_id: チャンネルID
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+
+    Returns:
+        未アップロードのショート情報リスト
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+        all_values = worksheet.get_all_values()
+
+        if len(all_values) <= 1:
+            return []
+
+        pending_shorts = []
+        for row_idx, row in enumerate(all_values[1:], start=2):
+            if len(row) < 11:
+                continue
+
+            # チャンネルIDが一致 & ステータスがpending
+            if row[1] == channel_id and row[10] == 'pending':
+                pending_shorts.append({
+                    'row_index': row_idx,
+                    'youtuber_name': row[0],
+                    'channel_id': row[1],
+                    'source_video_id': row[2],
+                    'file_path': row[3],
+                    'title': row[4],
+                    'description': row[5],
+                    'score': float(row[6]) if row[6] else 0.0,
+                    'reason': row[7],
+                    'start_sec': float(row[8]) if row[8] else 0.0,
+                    'end_sec': float(row[9]) if row[9] else 0.0,
+                    'status': row[10]
+                })
+
+        # スコア順にソート（高い順）
+        pending_shorts.sort(key=lambda x: x['score'], reverse=True)
+
+        log_info(f"Found {len(pending_shorts)} pending shorts for {channel_id}")
+        return pending_shorts
+
+    except Exception as e:
+        log_error(f"Failed to get pending shorts: {e}", exc_info=True)
+        return []
+
+
+def add_shorts_to_queue(
+    shorts: List[dict],
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "ShortsQueue"
+) -> int:
+    """
+    ショート動画をキューに追加
+
+    Args:
+        shorts: ショート情報のリスト
+            [{ youtuber_name, channel_id, source_video_id, file_path,
+               title, description, score, reason, start_sec, end_sec }, ...]
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+
+    Returns:
+        追加した件数
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    if not shorts:
+        return 0
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+
+        # ヘッダーがなければ追加
+        headers = worksheet.row_values(1)
+        if not headers:
+            worksheet.append_row(SHORTS_QUEUE_HEADERS)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        rows_to_add = []
+        for short in shorts:
+            rows_to_add.append([
+                short.get('youtuber_name', ''),
+                short.get('channel_id', ''),
+                short.get('source_video_id', ''),
+                short.get('file_path', ''),
+                short.get('title', ''),
+                short.get('description', ''),
+                short.get('score', 0.0),
+                short.get('reason', ''),
+                short.get('start_sec', 0.0),
+                short.get('end_sec', 0.0),
+                'pending',  # ステータス
+                '',  # アップロード日時（空）
+                '',  # ショートURL（空）
+                now  # 作成日時
+            ])
+
+        # 一括追加
+        worksheet.append_rows(rows_to_add)
+
+        log_info(f"Added {len(rows_to_add)} shorts to queue")
+        return len(rows_to_add)
+
+    except Exception as e:
+        log_error(f"Failed to add shorts to queue: {e}", exc_info=True)
+        raise
+
+
+def mark_short_uploaded(
+    row_index: int,
+    short_url: str,
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "ShortsQueue"
+) -> None:
+    """
+    ショートをアップロード済みにマーク
+
+    Args:
+        row_index: スプシの行番号
+        short_url: アップロードされたショートのURL
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        raise ValueError("Spreadsheet ID is required")
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # K列(ステータス), L列(アップロード日時), M列(ショートURL)を更新
+        worksheet.update(f"K{row_index}:M{row_index}", [['uploaded', now, short_url]])
+
+        log_info(f"Marked row {row_index} as uploaded: {short_url}")
+
+    except Exception as e:
+        log_error(f"Failed to mark short as uploaded: {e}", exc_info=True)
+        raise
+
+
+def get_queue_stats(
+    channel_id: str,
+    spreadsheet_id: Optional[str] = None,
+    sheet_name: str = "ShortsQueue"
+) -> dict:
+    """
+    キューの統計情報を取得
+
+    Args:
+        channel_id: チャンネルID
+        spreadsheet_id: スプレッドシートID
+        sheet_name: シート名
+
+    Returns:
+        { pending: int, uploaded: int, total: int }
+    """
+    if not spreadsheet_id:
+        spreadsheet_id = config.SPREADSHEET_ID
+
+    if not spreadsheet_id:
+        return {'pending': 0, 'uploaded': 0, 'total': 0}
+
+    try:
+        worksheet = get_sheet(spreadsheet_id, sheet_name)
+        all_values = worksheet.get_all_values()
+
+        pending = 0
+        uploaded = 0
+
+        for row in all_values[1:]:
+            if len(row) >= 11 and row[1] == channel_id:
+                if row[10] == 'pending':
+                    pending += 1
+                elif row[10] == 'uploaded':
+                    uploaded += 1
+
+        return {
+            'pending': pending,
+            'uploaded': uploaded,
+            'total': pending + uploaded
+        }
+
+    except Exception as e:
+        log_error(f"Failed to get queue stats: {e}", exc_info=True)
+        return {'pending': 0, 'uploaded': 0, 'total': 0}
